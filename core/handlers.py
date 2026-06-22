@@ -8,12 +8,12 @@ from core.sheets import append_transaction
 
 router = Router()
 
-# Отримуємо рядок з ID, розбиваємо його по комі та прибираємо зайві пробіли
+# Fetch the raw ID string from env, split it by comma and strip any whitespace
 ALLOWED_IDS_RAW = os.getenv("ALLOWED_USER_ID", "")
 ALLOWED_IDS = [str(uid).strip() for uid in ALLOWED_IDS_RAW.split(",") if uid.strip()]
 
 def is_owner(user_id: int) -> bool:
-    """Перевірка, чи є користувач у списку дозволених ID."""
+    """Helper function to verify if the user's ID exists within the allowed list."""
     return str(user_id) in ALLOWED_IDS
 
 @router.message(CommandStart())
