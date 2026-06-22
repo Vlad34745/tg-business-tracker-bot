@@ -40,3 +40,16 @@ async def main():
 
     # Include the main routing layer
     dp.include_router(main_router)
+
+    logger.info("Bot is starting up... Beginning long polling.")
+    
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        logger.info("Bot session closed. Shutdown complete.")
+
+if __name__ == "__main__":
+    # Standard asyncio loop execution
+    asyncio.run(main())

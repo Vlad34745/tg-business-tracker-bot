@@ -2,15 +2,16 @@ import re
 from typing import Optional, Tuple
 
 # Income keywords tracker. If the message contains any of these, it's marked as "Income"
-INCOME_KEYWORDS = {"дохід", "доход", "зарплата", "зп", "аванс", "інвестиції", "фріланс", "upwork", "фоп", "fop", "кешбек", "inzhur", "інжур"}
-
-# Noise words to skip at the beginning of the message so they don't become categories
-SKIP_WORDS = {"поповнення", "оплата", "купівля", "покупка", "рахунок", "зняття", "перевод", "переведення", "переказ", "перекази", "переказати", "переказую", "переказуємо", "переказуєш", "переказуєте", "переказують"}
+INCOME_KEYWORDS = {
+    "дохід", "доход", "зарплата", "зп", "аванс", "інвестиції", "інвестиція", 
+    "фріланс", "фоп", "fop", "кешбек", "інжур", "inzhur", "upwork", "binance", 
+    "депозит", "бонус", "премія"
+}
 
 def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
     """
-    Parses the user's financial text message and strips away noise words at the beginning.
-    Format: <Amount> <Category> [Description] or <Category> <Amount> [Description]
+    Parses the user's financial text message splitting it by the position of the amount.
+    Format: <Category> <Amount> <Description> or <Amount> <Category> <Description>
     
     Returns: Tuple (type_tr, category, amount, description) or None if format is invalid.
     """
@@ -30,28 +31,33 @@ def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
     except ValueError:
         return None
 
-    # Remove the found amount from text to parse the remaining category and description
-    remaining_text = text.replace(match.group(0), '', 1).strip()
-    
-    # Split the remaining text into separate words
-    words = remaining_text.split()
-    if not words:
-        return None
+    # Get the start and end positions of the found number inside the text
+    start_pos, end_pos = match.span()
 
-    # Cleaning loop: skip noise words from the beginning of the list
-    while words and words[0].lower().strip(".,!?") in SKIP_WORDS:
-        words.pop(0)
+    # Split the text into what goes BEFORE the number and what goes AFTER
+    before_text = text[:start_pos].strip()
+    after_text = text[end_pos:].strip()
 
-    # If no words left after cleaning, fallback to default values
-    if not words:
-        category = "Other"
-        description = remaining_text
-    else:
-        # The first meaningful word becomes the Category, everything else goes to Description
+    # Determine Category and Description based on the message layout structure
+    if before_text and after_text:
+        # Format: "Поповнення рахунку 250 Київстар"
+        category = before_text.capitalize()
+        description = after_text
+    elif before_text and not after_text:
+        # Format: "Зубний 4100" or "Продукти АТБ 450"
+        category = before_text.capitalize()
+        description = "-"
+    elif after_text and not before_text:
+        # Format: "500 Продукти АТБ"
+        words = after_text.split()
         category = words[0].capitalize()
         description = " ".join(words[1:]) if len(words) > 1 else "-"
+    else:
+        # If only a number was sent: "500"
+        category = "Інше"
+        description = "-"
 
-    # Determine transaction type based on global text search
+    # Determine transaction type based on global text search using Ukrainian/English keywords
     text_lower = text.lower()
     if any(keyword in text_lower for keyword in INCOME_KEYWORDS):
         type_tr = "Income"
