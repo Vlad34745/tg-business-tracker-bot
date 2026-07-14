@@ -19,4 +19,4 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 1. Share your Google Sheet with your Google Service Account email.
 2. Put your `credentials.json` into the root directory.
 3. Setup your `.env` file with `BOT_TOKEN` and `ALLOWED_USER_ID`.
-4. Run the bot using `python -m core.bot` or launch via Windows `run_bot.bat`.
+4. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
