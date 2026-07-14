@@ -12,11 +12,12 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 ## 🛠️ Tech Stack
 - **Language:** Python 3.14+
 - **Framework:** Aiogram 3.x (Async Telegram Bot API)
-- **Database/Storage:** Google Sheets API (gspread_asyncio)
+- **Database/Storage:** Google Sheets API (`google-api-python-client`), wrapped with `asyncio.to_thread` for non-blocking calls
 - **Environment:** Python-dotenv, RegEx
 
 ## 🚀 Quick Start for Clients
 1. Share your Google Sheet with your Google Service Account email.
 2. Put your `credentials.json` into the root directory.
-3. Setup your `.env` file with `BOT_TOKEN` and `ALLOWED_USER_ID`.
-4. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
+3. Setup your `.env` file with `BOT_TOKEN` and `ALLOWED_USER_ID` (see `.env.example` for the required format).
+4. Install dependencies: `pip install -r requirements.txt`
+5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
