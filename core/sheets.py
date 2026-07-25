@@ -77,3 +77,61 @@ async def get_last_transaction():
         return None
 
     return rows[-1]
+
+
+async def delete_last_transaction():
+    """
+    Asynchronously deletes the last row from the Transactions sheet.
+
+    Returns:
+        The deleted row's data as a list, or None if the sheet had no
+        data rows to delete.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+
+        # Find the numeric sheetId for the "Transactions" tab —
+        # required by the batchUpdate deleteDimension request below.
+        metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheet_id = None
+        for tab in metadata.get("sheets", []):
+            if tab["properties"]["title"] == "Transactions":
+                sheet_id = tab["properties"]["sheetId"]
+                break
+        if sheet_id is None:
+            raise ValueError("Sheet tab 'Transactions' not found in the spreadsheet.")
+
+        range_name = "Transactions!A:E"
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_name,
+            valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING"
+        ).execute()
+        rows = result.get("values", [])
+        if not rows:
+            return None
+
+        last_row_data = rows[-1]
+        # 0-based row index within the sheet — matches the row's
+        # position since the range starts at row 1.
+        last_row_index = len(rows) - 1
+
+        delete_request = {
+            "requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": last_row_index,
+                        "endIndex": last_row_index + 1
+                    }
+                }
+            }]
+        }
+        sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body=delete_request).execute()
+
+        return last_row_data
+
+    return await asyncio.to_thread(sync_worker)

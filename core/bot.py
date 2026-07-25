@@ -46,6 +46,7 @@ async def main():
     await bot.set_my_commands([
         BotCommand(command="start", description="Почати роботу з ботом"),
         BotCommand(command="last", description="Показати останній запис"),
+        BotCommand(command="undo", description="Видалити останній запис"),
     ])
 
     logger.info("Bot is starting up... Beginning long polling.")
