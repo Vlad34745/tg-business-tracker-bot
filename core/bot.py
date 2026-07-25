@@ -5,6 +5,7 @@ import os
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 from dotenv import load_dotenv
 
 # Import the main router from handlers
@@ -40,6 +41,12 @@ async def main():
 
     # Include the main routing layer
     dp.include_router(main_router)
+
+    # Register the command list so Telegram shows it in the "/" menu
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Почати роботу з ботом"),
+        BotCommand(command="last", description="Показати останній запис"),
+    ])
 
     logger.info("Bot is starting up... Beginning long polling.")
     

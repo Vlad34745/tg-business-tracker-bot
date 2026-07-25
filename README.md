@@ -7,6 +7,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
+- 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
 - Windows automation setup included via batch scripting (`.bat`).
 
 ## 🛠️ Tech Stack
@@ -21,3 +22,10 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 3. Setup your `.env` file with `BOT_TOKEN` and `ALLOWED_USER_ID` (see `.env.example` for the required format).
 4. Install dependencies: `pip install -r requirements.txt`
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
+
+## 🧪 Running Tests
+Unit tests cover the message-parsing logic in `core/validator.py`:
+```
+pip install pytest
+pytest tests/ -v
+```

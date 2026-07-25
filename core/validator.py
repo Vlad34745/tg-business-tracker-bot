@@ -8,6 +8,18 @@ INCOME_KEYWORDS = {
     "депозит", "бонус", "премія"
 }
 
+
+def _capitalize_first(word: str) -> str:
+    """
+    Uppercase only the first character, leaving the rest of the word untouched.
+    Unlike str.capitalize(), this does not lowercase the remaining characters,
+    so abbreviations like "АТБ" or brand names like "iPhone" are preserved.
+    """
+    if not word:
+        return word
+    return word[0].upper() + word[1:]
+
+
 def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
     """
     Parses the user's financial text message splitting it by the position of the amount.
@@ -41,16 +53,16 @@ def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
     # Determine Category and Description based on the message layout structure
     if before_text and after_text:
         # Format: "Поповнення рахунку 250 Київстар"
-        category = before_text.capitalize()
+        category = _capitalize_first(before_text)
         description = after_text
     elif before_text and not after_text:
         # Format: "Зубний 4100" or "Продукти АТБ 450"
-        category = before_text.capitalize()
+        category = _capitalize_first(before_text)
         description = "-"
     elif after_text and not before_text:
         # Format: "500 Продукти АТБ"
         words = after_text.split()
-        category = words[0].capitalize()
+        category = _capitalize_first(words[0])
         description = " ".join(words[1:]) if len(words) > 1 else "-"
     else:
         # If only a number was sent: "500"
