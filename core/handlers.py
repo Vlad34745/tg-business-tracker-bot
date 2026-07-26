@@ -1,4 +1,6 @@
 import os
+import uuid
+from collections import OrderedDict
 from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import (
@@ -41,6 +43,21 @@ def _format_transaction(row) -> tuple[str, str, str, str, str]:
     padded = row + ["-"] * (5 - len(row))
     return tuple(padded[:5])
 
+# Holds parsed-but-unconfirmed transactions, keyed by a short random id
+# referenced from the inline confirm/cancel buttons' callback_data.
+# Capped so a burst of unconfirmed messages can't grow this unbounded —
+# this is a single-user bot, so a small cap is plenty.
+_PENDING_ENTRIES_MAX = 50
+pending_entries: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _store_pending_entry(entry: dict) -> str:
+    entry_id = uuid.uuid4().hex[:8]
+    pending_entries[entry_id] = entry
+    while len(pending_entries) > _PENDING_ENTRIES_MAX:
+        pending_entries.popitem(last=False)  # drop oldest
+    return entry_id
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     if not is_owner(message.from_user.id):
@@ -54,6 +71,7 @@ async def cmd_start(message: Message):
         "• <code>150 Обіди</code>\n"
         "• <code>25000 Зарплата червень</code>\n"
         "• <code>Таксі 220 центр</code>\n\n"
+        "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n\n"
         "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
         "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
         "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n\n"
@@ -191,6 +209,43 @@ async def cmd_report(message: Message):
 
     await message.answer("\n".join(lines), reply_markup=main_keyboard)
 
+@router.callback_query(F.data.startswith("entry_confirm:"))
+async def cb_entry_confirm(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    entry_id = callback.data.split(":", 1)[1]
+    entry = pending_entries.pop(entry_id, None)
+
+    if not entry:
+        await callback.answer("⌛ Запис застарів, спробуй надіслати ще раз.", show_alert=True)
+        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        return
+
+    try:
+        await append_transaction(**entry)
+        icon = "💰" if entry["type_tr"] == "Income" else "📉"
+        await callback.message.edit_text(
+            f"✅ <b>Запис успішно додано!</b>\n\n"
+            f"📅 <b>Дата:</b> {entry['date']}\n"
+            f"{icon} <b>Тип:</b> {entry['type_tr']}\n"
+            f"🏷️ <b>Категорія:</b> {entry['category']}\n"
+            f"💵 <b>Сума:</b> {entry['amount']} грн\n"
+            f"📝 <b>Опис:</b> {entry['description']}"
+        )
+        await callback.answer("Збережено")
+    except Exception as e:
+        await callback.message.edit_text(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+        await callback.answer()
+
+@router.callback_query(F.data.startswith("entry_cancel:"))
+async def cb_entry_cancel(callback: CallbackQuery):
+    entry_id = callback.data.split(":", 1)[1]
+    pending_entries.pop(entry_id, None)
+    await callback.message.edit_text("❌ Скасовано — запис не додано.")
+    await callback.answer()
+
 @router.message(F.text)
 async def handle_financial_entry(message: Message):
     if not is_owner(message.from_user.id):
@@ -203,21 +258,25 @@ async def handle_financial_entry(message: Message):
         return
 
     type_tr, category, amount, description = parsed_data
-    status_message = await message.answer("⏳ <i>Записую транзакцію в Google Таблицю...</i>")
     current_date = datetime.now().strftime("%Y-%m-%d")
-    
-    try:
-        await append_transaction(
-            date=current_date, type_tr=type_tr, category=category, amount=amount, description=description
-        )
-        icon = "💰" if type_tr == "Income" else "📉"
-        await status_message.edit_text(
-            f"✅ <b>Запис успішно додано!</b>\n\n"
-            f"📅 <b>Дата:</b> {current_date}\n"
-            f"{icon} <b>Тип:</b> {type_tr}\n"
-            f"🏷️ <b>Категорія:</b> {category}\n"
-            f"💵 <b>Сума:</b> {amount} грн\n"
-            f"📝 <b>Опис:</b> {description}"
-        )
-    except Exception as e:
-        await status_message.edit_text(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+
+    entry_id = _store_pending_entry({
+        "date": current_date, "type_tr": type_tr, "category": category,
+        "amount": amount, "description": description
+    })
+
+    icon = "💰" if type_tr == "Income" else "📉"
+    confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Зберегти", callback_data=f"entry_confirm:{entry_id}"),
+        InlineKeyboardButton(text="❌ Скасувати", callback_data=f"entry_cancel:{entry_id}"),
+    ]])
+
+    await message.answer(
+        f"👀 <b>Перевір перед збереженням:</b>\n\n"
+        f"📅 <b>Дата:</b> {current_date}\n"
+        f"{icon} <b>Тип:</b> {type_tr}\n"
+        f"🏷️ <b>Категорія:</b> {category}\n"
+        f"💵 <b>Сума:</b> {amount} грн\n"
+        f"📝 <b>Опис:</b> {description}",
+        reply_markup=confirm_keyboard
+    )
