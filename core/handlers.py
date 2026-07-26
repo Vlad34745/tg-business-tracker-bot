@@ -7,7 +7,11 @@ from aiogram.types import (
 )
 from aiogram.filters import CommandStart, Command
 from core.validator import parse_financial_message
-from core.sheets import append_transaction, get_last_transaction, delete_last_transaction
+from core.report import compute_monthly_report, format_month_label
+from core.sheets import (
+    append_transaction, get_last_transaction,
+    delete_last_transaction, get_all_transactions
+)
 
 router = Router()
 
@@ -24,7 +28,8 @@ def is_owner(user_id: int) -> bool:
 # Command("last") handler exactly the same way as typing it manually.
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="/last"), KeyboardButton(text="/undo")]
+        [KeyboardButton(text="/last"), KeyboardButton(text="/undo")],
+        [KeyboardButton(text="/report")]
     ],
     resize_keyboard=True,
     is_persistent=True
@@ -50,7 +55,8 @@ async def cmd_start(message: Message):
         "• <code>25000 Зарплата червень</code>\n"
         "• <code>Таксі 220 центр</code>\n\n"
         "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
-        "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n\n"
+        "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
+        "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n\n"
         "Спробуй відправити мені будь-яку транзакцію!"
     )
     await message.answer(welcome_text, reply_markup=main_keyboard)
@@ -144,6 +150,46 @@ async def cb_undo_confirm(callback: CallbackQuery):
 async def cb_undo_cancel(callback: CallbackQuery):
     await callback.message.edit_text("Скасовано — запис залишився в таблиці.")
     await callback.answer()
+
+@router.message(Command("report"))
+async def cmd_report(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    try:
+        rows = await get_all_transactions()
+    except Exception as e:
+        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    now = datetime.now()
+    summary = compute_monthly_report(rows, now.year, now.month)
+    month_label = format_month_label(now.year, now.month)
+
+    if summary["count"] == 0:
+        await message.answer(
+            f"📭 За <b>{month_label}</b> ще немає жодного запису.",
+            reply_markup=main_keyboard
+        )
+        return
+
+    balance_icon = "📈" if summary["balance"] >= 0 else "📉"
+
+    lines = [
+        f"<b>📊 Звіт за {month_label}</b>\n",
+        f"💰 <b>Дохід:</b> {summary['income_total']:.2f} грн",
+        f"📉 <b>Витрати:</b> {summary['expense_total']:.2f} грн",
+        f"{balance_icon} <b>Баланс:</b> {summary['balance']:.2f} грн",
+    ]
+
+    top_categories = summary["expense_by_category"][:5]
+    if top_categories:
+        lines.append("\n<b>🏷️ Топ категорій витрат:</b>")
+        for category, total in top_categories:
+            lines.append(f"• {category}: {total:.2f} грн")
+
+    await message.answer("\n".join(lines), reply_markup=main_keyboard)
 
 @router.message(F.text)
 async def handle_financial_entry(message: Message):

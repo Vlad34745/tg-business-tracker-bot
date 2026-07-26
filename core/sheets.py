@@ -135,3 +135,28 @@ async def delete_last_transaction():
         return last_row_data
 
     return await asyncio.to_thread(sync_worker)
+
+
+async def get_all_transactions():
+    """
+    Asynchronously fetches every transaction row from the sheet.
+    Used for aggregation features (e.g. the monthly /report command).
+
+    Returns:
+        A list of rows, each [date, type_tr, category, amount, description].
+        Empty list if the sheet has no data yet.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+
+        range_name = "Transactions!A:E"
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_name,
+            valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING"
+        ).execute()
+        return result.get("values", [])
+
+    return await asyncio.to_thread(sync_worker)

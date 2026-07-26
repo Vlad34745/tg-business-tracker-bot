@@ -8,6 +8,8 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
 - 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
+- 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal.
+- 📊 **`/report` Command:** Monthly income/expense summary with balance and top spending categories, computed directly from the spreadsheet.
 - Windows automation setup included via batch scripting (`.bat`).
 
 ## 🛠️ Tech Stack
@@ -24,7 +26,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
 
 ## 🧪 Running Tests
-Unit tests cover the message-parsing logic in `core/validator.py`:
+Unit tests cover the message-parsing logic in `core/validator.py` and the monthly report aggregation in `core/report.py`:
 ```
 pip install pytest
 pytest tests/ -v

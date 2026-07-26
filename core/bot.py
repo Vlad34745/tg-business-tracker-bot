@@ -47,6 +47,7 @@ async def main():
         BotCommand(command="start", description="Почати роботу з ботом"),
         BotCommand(command="last", description="Показати останній запис"),
         BotCommand(command="undo", description="Видалити останній запис"),
+        BotCommand(command="report", description="Звіт за поточний місяць"),
     ])
 
     logger.info("Bot is starting up... Beginning long polling.")
