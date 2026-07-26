@@ -11,7 +11,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
 - 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
 - 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal.
-- 📊 **`/report` Command:** Monthly income/expense summary with balance and top spending categories, computed directly from the spreadsheet.
+- 📊 **`/report` Command:** Income/expense summary with balance and top spending categories. Defaults to the current month, or specify a period: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days). Add `full` (e.g. `/report full`, `/report week full`) to list every category sorted by amount instead of just the top 5.
 - Windows automation setup included via batch scripting (`.bat`).
 
 ## 🛠️ Tech Stack

@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, date
+from typing import Optional, Callable
 
 # Ukrainian month names (genitive-adjacent, used as "Звіт за <Month> <Year>")
 MONTH_NAMES_UA = {
@@ -36,24 +36,11 @@ def _to_float(value) -> float:
         return 0.0
 
 
-def compute_monthly_report(rows: list, year: int, month: int) -> dict:
+def _aggregate_rows(rows: list, matches: Callable[[datetime], bool]) -> dict:
     """
-    Aggregate raw sheet rows into a monthly income/expense summary.
-
-    Args:
-        rows: list of [date, type, category, amount, description] rows,
-              as returned by the Sheets API (extra/missing trailing
-              columns are tolerated).
-        year, month: the calendar month to filter and aggregate.
-
-    Returns:
-        {
-            "count": int,                       # transactions matched
-            "income_total": float,
-            "expense_total": float,
-            "balance": float,
-            "expense_by_category": [(category, total), ...]  # sorted desc
-        }
+    Shared aggregation core used by both compute_monthly_report and
+    compute_period_report — walks the rows once, keeping only those
+    whose parsed date satisfies `matches`.
     """
     income_total = 0.0
     expense_total = 0.0
@@ -68,9 +55,7 @@ def compute_monthly_report(rows: list, year: int, month: int) -> dict:
         amount = _to_float(row[3])
 
         parsed_date = _parse_date(date_str)
-        if not parsed_date:
-            continue
-        if parsed_date.year != year or parsed_date.month != month:
+        if not parsed_date or not matches(parsed_date):
             continue
 
         count += 1
@@ -93,9 +78,47 @@ def compute_monthly_report(rows: list, year: int, month: int) -> dict:
     }
 
 
+def compute_monthly_report(rows: list, year: int, month: int) -> dict:
+    """
+    Aggregate raw sheet rows into a monthly income/expense summary.
+
+    Args:
+        rows: list of [date, type, category, amount, description] rows,
+              as returned by the Sheets API (extra/missing trailing
+              columns are tolerated).
+        year, month: the calendar month to filter and aggregate.
+
+    Returns:
+        {
+            "count": int,                       # transactions matched
+            "income_total": float,
+            "expense_total": float,
+            "balance": float,
+            "expense_by_category": [(category, total), ...]  # sorted desc
+        }
+    """
+    return _aggregate_rows(rows, lambda d: d.year == year and d.month == month)
+
+
+def compute_period_report(rows: list, start: date, end: date) -> dict:
+    """
+    Aggregate raw sheet rows into a summary over an arbitrary date range
+    (inclusive on both ends). Same return shape as compute_monthly_report.
+    Used for "/report 7d", "/report 2 weeks", etc.
+    """
+    return _aggregate_rows(rows, lambda d: start <= d.date() <= end)
+
+
 def format_month_label(year: int, month: int) -> str:
     """e.g. 'Липень 2026'"""
     return f"{MONTH_NAMES_UA.get(month, str(month))} {year}"
+
+
+def format_period_label(start: date, end: date) -> str:
+    """e.g. '20.07.2026 – 26.07.2026', or just one date if start == end."""
+    if start == end:
+        return start.strftime("%d.%m.%Y")
+    return f"{start.strftime('%d.%m.%Y')} – {end.strftime('%d.%m.%Y')}"
 
 
 def get_frequent_categories(rows: list, limit: int = 6) -> list:

@@ -1,7 +1,8 @@
 import os
+import re
 import uuid
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Router, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
@@ -9,7 +10,10 @@ from aiogram.types import (
 )
 from aiogram.filters import CommandStart, Command
 from core.validator import parse_financial_message
-from core.report import compute_monthly_report, format_month_label, get_frequent_categories
+from core.report import (
+    compute_monthly_report, format_month_label, get_frequent_categories,
+    compute_period_report, format_period_label
+)
 from core.sheets import (
     append_transaction, get_last_transaction,
     delete_last_transaction, get_all_transactions
@@ -103,7 +107,11 @@ async def cmd_start(message: Message):
         "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n\n"
         "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
         "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
-        "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n\n"
+        "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n"
+        "   Інші варіанти: <code>/report 6</code> (червень), <code>/report 6 2026</code>,\n"
+        "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>.\n"
+        "   Додай <code>full</code> в кінець, щоб побачити всі категорії (за сумою):\n"
+        "   <code>/report full</code>, <code>/report week full</code>.\n\n"
         "Спробуй відправити мені будь-яку транзакцію!"
     )
     await message.answer(welcome_text, reply_markup=main_keyboard)
@@ -204,19 +212,73 @@ async def cmd_report(message: Message):
         await message.answer("🔒 Доступ заблоковано.")
         return
 
+    now = datetime.now()
+    raw_args = message.text.split()[1:]
+
+    # Pull out an optional "show all categories" flag, wherever it appears
+    FULL_FLAG_WORDS = ("full", "all", "всі", "повний")
+    full_report = any(arg.lower() in FULL_FLAG_WORDS for arg in raw_args)
+    args = [arg for arg in raw_args if arg.lower() not in FULL_FLAG_WORDS]
+
+    # Decide between "period" mode (last N days) and "month" mode.
+    period_days = None
+    if args:
+        first_arg = args[0].lower()
+        day_match = re.fullmatch(r"(\d+)d", first_arg)
+        if first_arg in ("day", "today", "сьогодні"):
+            period_days = 1
+        elif first_arg in ("week", "тиждень"):
+            period_days = 7
+        elif day_match:
+            period_days = int(day_match.group(1))
+            if period_days < 1:
+                await message.answer("❌ <b>Кількість днів має бути більшою за 0.</b>")
+                return
+
     try:
         rows = await get_all_transactions()
     except Exception as e:
         await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
         return
 
-    now = datetime.now()
-    summary = compute_monthly_report(rows, now.year, now.month)
-    month_label = format_month_label(now.year, now.month)
+    if period_days is not None:
+        end_date = now.date()
+        start_date = end_date - timedelta(days=period_days - 1)
+        summary = compute_period_report(rows, start_date, end_date)
+        period_label = format_period_label(start_date, end_date)
+    else:
+        # Month mode: /report, /report 6, or /report 6 2026
+        year, month = now.year, now.month
+        if args:
+            try:
+                month = int(args[0])
+                if not (1 <= month <= 12):
+                    raise ValueError
+            except ValueError:
+                await message.answer(
+                    "❌ <b>Невірний формат.</b>\n"
+                    "Приклади: <code>/report</code>, <code>/report 6</code>, "
+                    "<code>/report 6 2026</code>, <code>/report 7d</code>, "
+                    "<code>/report week</code>"
+                )
+                return
+
+            if len(args) >= 2:
+                try:
+                    year = int(args[1])
+                except ValueError:
+                    await message.answer(
+                        "❌ <b>Невірний рік.</b>\n"
+                        "Приклад: <code>/report 6 2026</code>"
+                    )
+                    return
+
+        summary = compute_monthly_report(rows, year, month)
+        period_label = format_month_label(year, month)
 
     if summary["count"] == 0:
         await message.answer(
-            f"📭 За <b>{month_label}</b> ще немає жодного запису.",
+            f"📭 За <b>{period_label}</b> ще немає жодного запису.",
             reply_markup=main_keyboard
         )
         return
@@ -224,16 +286,22 @@ async def cmd_report(message: Message):
     balance_icon = "📈" if summary["balance"] >= 0 else "📉"
 
     lines = [
-        f"<b>📊 Звіт за {month_label}</b>\n",
+        f"<b>📊 Звіт за {period_label}</b>\n",
         f"💰 <b>Дохід:</b> {summary['income_total']:.2f} грн",
         f"📉 <b>Витрати:</b> {summary['expense_total']:.2f} грн",
         f"{balance_icon} <b>Баланс:</b> {summary['balance']:.2f} грн",
     ]
 
-    top_categories = summary["expense_by_category"][:5]
-    if top_categories:
-        lines.append("\n<b>🏷️ Топ категорій витрат:</b>")
-        for category, total in top_categories:
+    if full_report:
+        categories_to_show = summary["expense_by_category"]  # already sorted by amount desc
+        section_title = "🏷️ Усі категорії витрат (за сумою):"
+    else:
+        categories_to_show = summary["expense_by_category"][:5]
+        section_title = "🏷️ Топ категорій витрат:"
+
+    if categories_to_show:
+        lines.append(f"\n<b>{section_title}</b>")
+        for category, total in categories_to_show:
             lines.append(f"• {category}: {total:.2f} грн")
 
     await message.answer("\n".join(lines), reply_markup=main_keyboard)
