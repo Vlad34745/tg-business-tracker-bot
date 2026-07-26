@@ -96,3 +96,22 @@ def compute_monthly_report(rows: list, year: int, month: int) -> dict:
 def format_month_label(year: int, month: int) -> str:
     """e.g. 'Липень 2026'"""
     return f"{MONTH_NAMES_UA.get(month, str(month))} {year}"
+
+
+def get_frequent_categories(rows: list, limit: int = 6) -> list:
+    """
+    Count how often each category appears across all rows and return
+    the most frequent ones, most-used first. Used to power the
+    "pick a category" quick-buttons when editing a pending entry.
+    """
+    counts: dict = {}
+    for row in rows:
+        if len(row) < 3:
+            continue
+        category = row[2]
+        if not category:
+            continue
+        counts[category] = counts.get(category, 0) + 1
+
+    sorted_categories = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    return [category for category, _ in sorted_categories[:limit]]

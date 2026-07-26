@@ -9,7 +9,7 @@ from aiogram.types import (
 )
 from aiogram.filters import CommandStart, Command
 from core.validator import parse_financial_message
-from core.report import compute_monthly_report, format_month_label
+from core.report import compute_monthly_report, format_month_label, get_frequent_categories
 from core.sheets import (
     append_transaction, get_last_transaction,
     delete_last_transaction, get_all_transactions
@@ -57,6 +57,35 @@ def _store_pending_entry(entry: dict) -> str:
     while len(pending_entries) > _PENDING_ENTRIES_MAX:
         pending_entries.popitem(last=False)  # drop oldest
     return entry_id
+
+# Tracks users who are mid-flow entering a custom category name for a
+# pending entry: user_id -> entry_id. The next free-text message from
+# that user is treated as the new category, not a new transaction.
+awaiting_category_text: dict = {}
+
+
+def _build_preview_text(entry: dict) -> str:
+    icon = "💰" if entry["type_tr"] == "Income" else "📉"
+    return (
+        f"👀 <b>Перевір перед збереженням:</b>\n\n"
+        f"📅 <b>Дата:</b> {entry['date']}\n"
+        f"{icon} <b>Тип:</b> {entry['type_tr']}\n"
+        f"🏷️ <b>Категорія:</b> {entry['category']}\n"
+        f"💵 <b>Сума:</b> {entry['amount']} грн\n"
+        f"📝 <b>Опис:</b> {entry['description']}"
+    )
+
+
+def _build_preview_keyboard(entry_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Зберегти", callback_data=f"entry_confirm:{entry_id}"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"entry_cancel:{entry_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Змінити категорію", callback_data=f"entry_edit_cat:{entry_id}"),
+        ],
+    ])
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -246,10 +275,116 @@ async def cb_entry_cancel(callback: CallbackQuery):
     await callback.message.edit_text("❌ Скасовано — запис не додано.")
     await callback.answer()
 
+@router.callback_query(F.data.startswith("entry_edit_cat:"))
+async def cb_entry_edit_category(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    entry_id = callback.data.split(":", 1)[1]
+    entry = pending_entries.get(entry_id)
+    if not entry:
+        await callback.answer("⌛ Запис застарів, спробуй надіслати ще раз.", show_alert=True)
+        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        return
+
+    try:
+        rows = await get_all_transactions()
+        top_categories = get_frequent_categories(rows, limit=6)
+    except Exception:
+        top_categories = []  # fall back to just the custom-input option
+
+    buttons = [
+        [InlineKeyboardButton(text=cat, callback_data=f"set_cat:{entry_id}:{cat}")]
+        for cat in top_categories
+    ]
+    buttons.append([
+        InlineKeyboardButton(text="✏️ Свій варіант", callback_data=f"custom_cat:{entry_id}")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"back_to_preview:{entry_id}")
+    ])
+
+    await callback.message.edit_text(
+        "🏷️ <b>Обери категорію або введи свою:</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("set_cat:"))
+async def cb_set_category(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    _, entry_id, new_category = callback.data.split(":", 2)
+    entry = pending_entries.get(entry_id)
+    if not entry:
+        await callback.answer("⌛ Запис застарів.", show_alert=True)
+        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        return
+
+    entry["category"] = new_category
+    await callback.message.edit_text(
+        _build_preview_text(entry),
+        reply_markup=_build_preview_keyboard(entry_id)
+    )
+    await callback.answer("Категорію оновлено")
+
+@router.callback_query(F.data.startswith("custom_cat:"))
+async def cb_custom_category(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    entry_id = callback.data.split(":", 1)[1]
+    if entry_id not in pending_entries:
+        await callback.answer("⌛ Запис застарів.", show_alert=True)
+        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        return
+
+    awaiting_category_text[callback.from_user.id] = entry_id
+    await callback.message.edit_text("✏️ Напиши нову назву категорії повідомленням:")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("back_to_preview:"))
+async def cb_back_to_preview(callback: CallbackQuery):
+    entry_id = callback.data.split(":", 1)[1]
+    entry = pending_entries.get(entry_id)
+    if not entry:
+        await callback.answer("⌛ Запис застарів.", show_alert=True)
+        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        return
+
+    await callback.message.edit_text(
+        _build_preview_text(entry),
+        reply_markup=_build_preview_keyboard(entry_id)
+    )
+    await callback.answer()
+
 @router.message(F.text)
 async def handle_financial_entry(message: Message):
     if not is_owner(message.from_user.id):
         await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    # If we're mid-flow waiting for a custom category name, treat this
+    # message as that answer instead of parsing it as a new transaction.
+    user_id = message.from_user.id
+    if user_id in awaiting_category_text:
+        entry_id = awaiting_category_text.pop(user_id)
+        entry = pending_entries.get(entry_id)
+        if not entry:
+            await message.answer("⌛ Запис застарів, спробуй надіслати транзакцію ще раз.")
+            return
+
+        new_category = message.text.strip()
+        entry["category"] = new_category[0].upper() + new_category[1:] if new_category else entry["category"]
+
+        await message.answer(
+            _build_preview_text(entry),
+            reply_markup=_build_preview_keyboard(entry_id)
+        )
         return
 
     parsed_data = parse_financial_message(message.text)
@@ -265,18 +400,7 @@ async def handle_financial_entry(message: Message):
         "amount": amount, "description": description
     })
 
-    icon = "💰" if type_tr == "Income" else "📉"
-    confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Зберегти", callback_data=f"entry_confirm:{entry_id}"),
-        InlineKeyboardButton(text="❌ Скасувати", callback_data=f"entry_cancel:{entry_id}"),
-    ]])
-
     await message.answer(
-        f"👀 <b>Перевір перед збереженням:</b>\n\n"
-        f"📅 <b>Дата:</b> {current_date}\n"
-        f"{icon} <b>Тип:</b> {type_tr}\n"
-        f"🏷️ <b>Категорія:</b> {category}\n"
-        f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}",
-        reply_markup=confirm_keyboard
+        _build_preview_text(pending_entries[entry_id]),
+        reply_markup=_build_preview_keyboard(entry_id)
     )
