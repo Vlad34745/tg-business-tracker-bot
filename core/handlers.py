@@ -67,11 +67,38 @@ def _store_pending_entry(entry: dict) -> str:
 # that user is treated as the new category, not a new transaction.
 awaiting_category_text: dict = {}
 
+# Tracks recently *saved* transactions per user, to warn about likely
+# accidental duplicates (e.g. a double-tap or a flaky connection
+# resending the same message). Not a hard block — just a warning banner
+# on the confirmation preview; the user can still save it if it's real.
+DUPLICATE_WINDOW_SECONDS = 120
+recent_entries: dict = {}
+
+
+def _record_recent_entry(user_id: int, type_tr: str, category: str, amount: float) -> None:
+    now = datetime.now()
+    entries = recent_entries.setdefault(user_id, [])
+    entries.append((now, type_tr, category, amount))
+    cutoff = now - timedelta(seconds=DUPLICATE_WINDOW_SECONDS)
+    recent_entries[user_id] = [e for e in entries if e[0] >= cutoff]
+
+
+def _is_likely_duplicate(user_id: int, type_tr: str, category: str, amount: float) -> bool:
+    cutoff = datetime.now() - timedelta(seconds=DUPLICATE_WINDOW_SECONDS)
+    return any(
+        ts >= cutoff and t == type_tr and c == category and a == amount
+        for ts, t, c, a in recent_entries.get(user_id, [])
+    )
+
 
 def _build_preview_text(entry: dict) -> str:
     icon = "💰" if entry["type_tr"] == "Income" else "📉"
+    warning = (
+        "⚠️ <b>Схожий запис уже додано нещодавно!</b> Перевір, чи це не дубль.\n\n"
+        if entry.get("is_duplicate") else ""
+    )
     return (
-        f"👀 <b>Перевір перед збереженням:</b>\n\n"
+        f"{warning}👀 <b>Перевір перед збереженням:</b>\n\n"
         f"📅 <b>Дата:</b> {entry['date']}\n"
         f"{icon} <b>Тип:</b> {entry['type_tr']}\n"
         f"🏷️ <b>Категорія:</b> {entry['category']}\n"
@@ -104,7 +131,8 @@ async def cmd_start(message: Message):
         "• <code>150 Обіди</code>\n"
         "• <code>25000 Зарплата червень</code>\n"
         "• <code>Таксі 220 центр</code>\n\n"
-        "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n\n"
+        "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n"
+        "Якщо схожий запис уже був нещодавно — попереджу окремо.\n\n"
         "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
         "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
         "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n"
@@ -321,7 +349,9 @@ async def cb_entry_confirm(callback: CallbackQuery):
         return
 
     try:
-        await append_transaction(**entry)
+        transaction_data = {k: v for k, v in entry.items() if k != "is_duplicate"}
+        await append_transaction(**transaction_data)
+        _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
         icon = "💰" if entry["type_tr"] == "Income" else "📉"
         await callback.message.edit_text(
             f"✅ <b>Запис успішно додано!</b>\n\n"
@@ -462,10 +492,11 @@ async def handle_financial_entry(message: Message):
 
     type_tr, category, amount, description = parsed_data
     current_date = datetime.now().strftime("%Y-%m-%d")
+    is_duplicate = _is_likely_duplicate(user_id, type_tr, category, amount)
 
     entry_id = _store_pending_entry({
         "date": current_date, "type_tr": type_tr, "category": category,
-        "amount": amount, "description": description
+        "amount": amount, "description": description, "is_duplicate": is_duplicate
     })
 
     await message.answer(
