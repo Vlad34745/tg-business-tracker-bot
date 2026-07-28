@@ -48,6 +48,7 @@ async def main():
         BotCommand(command="last", description="Показати останній запис"),
         BotCommand(command="undo", description="Видалити останній запис"),
         BotCommand(command="report", description="Звіт: місяць/тиждень/день (напр. /report 7d)"),
+        BotCommand(command="budget", description="Ліміти по категоріях (/budget set Кафе 1000)"),
     ])
 
     logger.info("Bot is starting up... Beginning long polling.")

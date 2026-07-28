@@ -14,9 +14,11 @@ from core.report import (
     compute_monthly_report, format_month_label, get_frequent_categories,
     compute_period_report, format_period_label
 )
+from core.budget import parse_budgets_rows, check_budget_status
 from core.sheets import (
     append_transaction, get_last_transaction,
-    delete_last_transaction, get_all_transactions
+    delete_last_transaction, get_all_transactions,
+    get_budgets, set_budget, delete_budget
 )
 
 router = Router()
@@ -35,7 +37,7 @@ def is_owner(user_id: int) -> bool:
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="/last"), KeyboardButton(text="/undo")],
-        [KeyboardButton(text="/report")]
+        [KeyboardButton(text="/report"), KeyboardButton(text="/budget")]
     ],
     resize_keyboard=True,
     is_persistent=True
@@ -140,6 +142,9 @@ async def cmd_start(message: Message):
         "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>.\n"
         "   Додай <code>full</code> в кінець, щоб побачити всі категорії (за сумою):\n"
         "   <code>/report full</code>, <code>/report week full</code>.\n\n"
+        "💼 Команда <code>/budget</code> покаже ліміти й витрати за місяць.\n"
+        "   <code>/budget set Кафе 1000</code> — встановити ліміт.\n"
+        "   <code>/budget remove Кафе</code> — видалити ліміт.\n\n"
         "Спробуй відправити мені будь-яку транзакцію!"
     )
     await message.answer(welcome_text, reply_markup=main_keyboard)
@@ -274,6 +279,7 @@ async def cmd_report(message: Message):
         start_date = end_date - timedelta(days=period_days - 1)
         summary = compute_period_report(rows, start_date, end_date)
         period_label = format_period_label(start_date, end_date)
+        is_month_mode = False
     else:
         # Month mode: /report, /report 6, or /report 6 2026
         year, month = now.year, now.month
@@ -303,6 +309,7 @@ async def cmd_report(message: Message):
 
         summary = compute_monthly_report(rows, year, month)
         period_label = format_month_label(year, month)
+        is_month_mode = True
 
     if summary["count"] == 0:
         await message.answer(
@@ -331,6 +338,127 @@ async def cmd_report(message: Message):
         lines.append(f"\n<b>{section_title}</b>")
         for category, total in categories_to_show:
             lines.append(f"• {category}: {total:.2f} грн")
+
+    if is_month_mode:
+        try:
+            budgets = parse_budgets_rows(await get_budgets())
+        except Exception:
+            budgets = {}
+        overages = [
+            (cat, spent, limit) for cat, spent, limit
+            in check_budget_status(summary["expense_by_category"], budgets)
+            if spent > limit
+        ]
+        if overages:
+            lines.append("\n<b>⚠️ Перевищено ліміт:</b>")
+            for category, spent, limit in overages:
+                lines.append(f"🔴 {category}: {spent:.2f} / {limit:.2f} грн")
+
+    await message.answer("\n".join(lines), reply_markup=main_keyboard)
+
+@router.message(Command("budget"))
+async def cmd_budget(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    args = message.text.split()[1:]
+
+    # /budget set <category words...> <amount>
+    if args and args[0].lower() == "set":
+        if len(args) < 3:
+            await message.answer(
+                "❌ <b>Формат:</b> <code>/budget set Кафе 1000</code>",
+                reply_markup=main_keyboard
+            )
+            return
+        category_raw = " ".join(args[1:-1]).strip()
+        category = category_raw[0].upper() + category_raw[1:] if category_raw else category_raw
+        try:
+            limit = float(args[-1].replace(",", "."))
+            if limit <= 0:
+                raise ValueError
+        except ValueError:
+            await message.answer(
+                "❌ <b>Невірна сума ліміту.</b> Приклад: <code>/budget set Кафе 1000</code>",
+                reply_markup=main_keyboard
+            )
+            return
+
+        try:
+            await set_budget(category, limit)
+        except Exception as e:
+            await message.answer(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+            return
+
+        await message.answer(
+            f"✅ Ліміт для <b>{category}</b> встановлено: {limit:.2f} грн/міс",
+            reply_markup=main_keyboard
+        )
+        return
+
+    # /budget remove <category words...>
+    if args and args[0].lower() in ("remove", "delete", "видалити"):
+        if len(args) < 2:
+            await message.answer(
+                "❌ <b>Формат:</b> <code>/budget remove Кафе</code>",
+                reply_markup=main_keyboard
+            )
+            return
+        category = " ".join(args[1:]).strip()
+        try:
+            deleted = await delete_budget(category)
+        except Exception as e:
+            await message.answer(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+            return
+
+        if deleted:
+            await message.answer(f"🗑️ Ліміт для <b>{category}</b> видалено.", reply_markup=main_keyboard)
+        else:
+            await message.answer(f"📭 Ліміт для <b>{category}</b> не знайдено.", reply_markup=main_keyboard)
+        return
+
+    if args:
+        await message.answer(
+            "❌ <b>Невідома команда.</b>\n\n"
+            "• <code>/budget</code> — показати всі ліміти\n"
+            "• <code>/budget set Кафе 1000</code> — встановити ліміт\n"
+            "• <code>/budget remove Кафе</code> — видалити ліміт",
+            reply_markup=main_keyboard
+        )
+        return
+
+    # No args: show current budgets vs. this month's spending
+    try:
+        budgets = parse_budgets_rows(await get_budgets())
+    except Exception as e:
+        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    if not budgets:
+        await message.answer(
+            "📭 <b>Ліміти ще не встановлені.</b>\n\n"
+            "Встанови перший: <code>/budget set Кафе 1000</code>",
+            reply_markup=main_keyboard
+        )
+        return
+
+    try:
+        rows = await get_all_transactions()
+    except Exception as e:
+        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    now = datetime.now()
+    summary = compute_monthly_report(rows, now.year, now.month)
+    spent_by_category = dict(summary["expense_by_category"])
+
+    lines = [f"<b>💼 Бюджет на {format_month_label(now.year, now.month)}</b>\n"]
+    for category, limit in sorted(budgets.items()):
+        spent = spent_by_category.get(category, 0.0)
+        pct = (spent / limit * 100) if limit else 0
+        icon = "🔴" if spent > limit else ("🟡" if pct >= 80 else "🟢")
+        lines.append(f"{icon} <b>{category}:</b> {spent:.2f} / {limit:.2f} грн ({pct:.0f}%)")
 
     await message.answer("\n".join(lines), reply_markup=main_keyboard)
 

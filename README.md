@@ -7,6 +7,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - ✅ **Confirm Before Save:** Every parsed entry is shown as a preview with inline ✅/❌ buttons before it's written to the sheet.
 - ✏️ **Edit Category On the Fly:** Pick from your most-used categories via quick buttons, or type a custom one, right from the confirmation preview.
 - ⚠️ **Duplicate Warning:** Flags a pending entry if a transaction with the same type/category/amount was saved in the last 2 minutes, to catch accidental double-sends.
+- 💼 **`/budget` Command:** Set monthly spending limits per category (`/budget set Кафе 1000`), see current usage vs. limits, and get an over-budget warning inside `/report`.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
@@ -29,7 +30,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
 
 ## 🧪 Running Tests
-Unit tests cover the message-parsing logic in `core/validator.py` and the monthly report aggregation in `core/report.py`:
+Unit tests cover the message-parsing logic in `core/validator.py`, the monthly report aggregation in `core/report.py`, and budget comparison in `core/budget.py`:
 ```
 pip install pytest
 pytest tests/ -v
