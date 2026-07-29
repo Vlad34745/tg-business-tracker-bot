@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from aiogram import Router, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
-    CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+    CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    BufferedInputFile
 )
 from aiogram.filters import CommandStart, Command
 from core.validator import parse_financial_message
@@ -15,6 +16,7 @@ from core.report import (
     compute_period_report, format_period_label
 )
 from core.budget import parse_budgets_rows, check_budget_status
+from core.chart import generate_category_chart
 from core.sheets import (
     append_transaction, get_last_transaction,
     delete_last_transaction, get_all_transactions,
@@ -139,9 +141,12 @@ async def cmd_start(message: Message):
         "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
         "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n"
         "   Інші варіанти: <code>/report 6</code> (червень), <code>/report 6 2026</code>,\n"
-        "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>.\n"
+        "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>,\n"
+        "   <code>/report 2week</code>, <code>/report 1month</code>.\n"
         "   Додай <code>full</code> в кінець, щоб побачити всі категорії (за сумою):\n"
-        "   <code>/report full</code>, <code>/report week full</code>.\n\n"
+        "   <code>/report full</code>, <code>/report week full</code>.\n"
+        "   Або обери кількість: <code>/report top10</code>, <code>/report week top3</code>.\n"
+        "   Графік завжди відповідає обраній кількості категорій.\n\n"
         "💼 Команда <code>/budget</code> покаже ліміти й витрати за місяць.\n"
         "   <code>/budget set Кафе 1000</code> — встановити ліміт.\n"
         "   <code>/budget remove Кафе</code> — видалити ліміт.\n\n"
@@ -253,11 +258,29 @@ async def cmd_report(message: Message):
     full_report = any(arg.lower() in FULL_FLAG_WORDS for arg in raw_args)
     args = [arg for arg in raw_args if arg.lower() not in FULL_FLAG_WORDS]
 
+    # Pull out an optional "topN" flag (e.g. "top10"), wherever it appears.
+    # Defaults to top 5, matching the original behavior when not specified.
+    top_n = 5
+    remaining_args = []
+    for arg in args:
+        top_match = re.fullmatch(r"top(\d+)", arg.lower())
+        if top_match:
+            top_n = int(top_match.group(1))
+            if top_n < 1:
+                await message.answer("❌ <b>Кількість категорій має бути більшою за 0.</b>")
+                return
+        else:
+            remaining_args.append(arg)
+    args = remaining_args
+
     # Decide between "period" mode (last N days) and "month" mode.
     period_days = None
     if args:
         first_arg = args[0].lower()
         day_match = re.fullmatch(r"(\d+)d", first_arg)
+        week_match = re.fullmatch(r"(\d+)(week|weeks|тиждень|тижні|тижнів)", first_arg)
+        month_match = re.fullmatch(r"(\d+)(month|months|місяць|місяці|місяців)", first_arg)
+
         if first_arg in ("day", "today", "сьогодні"):
             period_days = 1
         elif first_arg in ("week", "тиждень"):
@@ -266,6 +289,18 @@ async def cmd_report(message: Message):
             period_days = int(day_match.group(1))
             if period_days < 1:
                 await message.answer("❌ <b>Кількість днів має бути більшою за 0.</b>")
+                return
+        elif week_match:
+            period_days = int(week_match.group(1)) * 7
+            if period_days < 1:
+                await message.answer("❌ <b>Кількість тижнів має бути більшою за 0.</b>")
+                return
+        elif month_match:
+            # Approximate — a rolling N-month window, not calendar months.
+            # For an exact calendar month use "/report 6" / "/report 6 2026" instead.
+            period_days = int(month_match.group(1)) * 30
+            if period_days < 1:
+                await message.answer("❌ <b>Кількість місяців має бути більшою за 0.</b>")
                 return
 
     try:
@@ -331,8 +366,8 @@ async def cmd_report(message: Message):
         categories_to_show = summary["expense_by_category"]  # already sorted by amount desc
         section_title = "🏷️ Усі категорії витрат (за сумою):"
     else:
-        categories_to_show = summary["expense_by_category"][:5]
-        section_title = "🏷️ Топ категорій витрат:"
+        categories_to_show = summary["expense_by_category"][:top_n]
+        section_title = f"🏷️ Топ-{top_n} категорій витрат:"
 
     if categories_to_show:
         lines.append(f"\n<b>{section_title}</b>")
@@ -355,6 +390,15 @@ async def cmd_report(message: Message):
                 lines.append(f"🔴 {category}: {spent:.2f} / {limit:.2f} грн")
 
     await message.answer("\n".join(lines), reply_markup=main_keyboard)
+
+    chart_buffer = generate_category_chart(
+        summary["expense_by_category"], f"Витрати за {period_label}",
+        top_n=len(summary["expense_by_category"]) if full_report else top_n
+    )
+    if chart_buffer:
+        await message.answer_photo(
+            BufferedInputFile(chart_buffer.read(), filename="report_chart.png")
+        )
 
 @router.message(Command("budget"))
 async def cmd_budget(message: Message):

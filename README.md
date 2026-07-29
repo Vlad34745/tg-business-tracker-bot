@@ -8,12 +8,13 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - ✏️ **Edit Category On the Fly:** Pick from your most-used categories via quick buttons, or type a custom one, right from the confirmation preview.
 - ⚠️ **Duplicate Warning:** Flags a pending entry if a transaction with the same type/category/amount was saved in the last 2 minutes, to catch accidental double-sends.
 - 💼 **`/budget` Command:** Set monthly spending limits per category (`/budget set Кафе 1000`), see current usage vs. limits, and get an over-budget warning inside `/report`.
+- 📈 **Report Chart:** Every `/report` sends a horizontal bar chart image of the top spending categories alongside the text summary.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
 - 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
 - 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal.
-- 📊 **`/report` Command:** Income/expense summary with balance and top spending categories. Defaults to the current month, or specify a period: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days). Add `full` (e.g. `/report full`, `/report week full`) to list every category sorted by amount instead of just the top 5.
+- 📊 **`/report` Command:** Income/expense summary with balance and top spending categories. Defaults to the current month, or specify a period: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days), `/report 2week`, `/report 1month`. Add `full` to list every category, or `topN` (e.g. `top10`) to choose how many to show — the chart image always matches.
 - Windows automation setup included via batch scripting (`.bat`).
 
 ## 🛠️ Tech Stack
