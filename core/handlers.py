@@ -10,16 +10,20 @@ from aiogram.types import (
     BufferedInputFile
 )
 from aiogram.filters import CommandStart, Command
-from core.validator import parse_financial_message
+from core.validator import parse_financial_message, parse_multiline_message
 from core.report import (
     compute_monthly_report, format_month_label, get_frequent_categories,
     compute_period_report, format_period_label
 )
 from core.budget import parse_budgets_rows, check_budget_status
 from core.chart import generate_category_chart
+from core.export import build_csv
+from core.search import filter_transactions
+from core import reminder
 from core.sheets import (
     append_transaction, get_last_transaction,
     delete_last_transaction, get_all_transactions,
+    get_last_n_transactions, delete_last_n_transactions,
     get_budgets, set_budget, delete_budget
 )
 
@@ -39,7 +43,8 @@ def is_owner(user_id: int) -> bool:
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="/last"), KeyboardButton(text="/undo")],
-        [KeyboardButton(text="/report"), KeyboardButton(text="/budget")]
+        [KeyboardButton(text="/report"), KeyboardButton(text="/budget")],
+        [KeyboardButton(text="/export"), KeyboardButton(text="/find")]
     ],
     resize_keyboard=True,
     is_persistent=True
@@ -65,6 +70,25 @@ def _store_pending_entry(entry: dict) -> str:
     while len(pending_entries) > _PENDING_ENTRIES_MAX:
         pending_entries.popitem(last=False)  # drop oldest
     return entry_id
+
+# Holds parsed-but-unconfirmed *batches* of transactions (multi-line
+# input), keyed the same way as pending_entries but each value is a
+# list of entry dicts instead of a single one.
+_PENDING_BATCHES_MAX = 20
+pending_batches: "OrderedDict[str, list]" = OrderedDict()
+
+
+def _store_pending_batch(entries: list) -> str:
+    batch_id = uuid.uuid4().hex[:8]
+    pending_batches[batch_id] = entries
+    while len(pending_batches) > _PENDING_BATCHES_MAX:
+        pending_batches.popitem(last=False)
+    return batch_id
+
+# Remembers how many rows the most recent successful save added for each
+# user (1 for a normal confirm, N for a multi-entry batch confirm), so
+# /undo can remove the whole batch as one unit instead of just one row.
+_last_action_count: dict = {}
 
 # Tracks users who are mid-flow entering a custom category name for a
 # pending entry: user_id -> entry_id. The next free-text message from
@@ -139,6 +163,7 @@ async def cmd_start(message: Message):
         "Якщо схожий запис уже був нещодавно — попереджу окремо.\n\n"
         "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
         "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
+        "   Якщо востаннє зберігав кілька записів разом — видалить усі відразу.\n"
         "📊 Команда <code>/report</code> покаже звіт за поточний місяць.\n"
         "   Інші варіанти: <code>/report 6</code> (червень), <code>/report 6 2026</code>,\n"
         "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>,\n"
@@ -150,6 +175,11 @@ async def cmd_start(message: Message):
         "💼 Команда <code>/budget</code> покаже ліміти й витрати за місяць.\n"
         "   <code>/budget set Кафе 1000</code> — встановити ліміт.\n"
         "   <code>/budget remove Кафе</code> — видалити ліміт.\n\n"
+        "📄 Команда <code>/export</code> вивантажить усі записи у CSV.\n"
+        "🔍 Команда <code>/find</code> знайде записи (напр. <code>/find кафе</code>).\n"
+        "🔔 Команда <code>/remind</code> керує щоденним нагадуванням о 21:00.\n\n"
+        "✨ Можна надіслати кілька транзакцій одним повідомленням —\n"
+        "   кожну з нового рядка, і я запропоную зберегти всі одразу.\n\n"
         "Спробуй відправити мені будь-яку транзакцію!"
     )
     await message.answer(welcome_text, reply_markup=main_keyboard)
@@ -190,6 +220,42 @@ async def cmd_undo(message: Message):
         await message.answer("🔒 Доступ заблоковано.")
         return
 
+    user_id = message.from_user.id
+    last_count = _last_action_count.get(user_id, 1)
+
+    if last_count > 1:
+        # The most recent save was a multi-entry batch — offer to undo
+        # the whole batch as one unit instead of just the last row.
+        try:
+            rows = await get_last_n_transactions(last_count)
+        except Exception as e:
+            await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+            return
+
+        if not rows:
+            await message.answer("📭 У таблиці ще немає жодного запису для видалення.")
+            return
+
+        total = 0.0
+        preview_lines = [f"⚠️ <b>Видалити останні {len(rows)} записи (збережені разом)?</b>\n"]
+        for row in rows:
+            date, type_tr, category, amount, description = _format_transaction(row)
+            icon = "💰" if type_tr == "Income" else "📉"
+            preview_lines.append(f"{icon} {category}: {amount} грн")
+            try:
+                total += float(str(amount).replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+        preview_lines.append(f"\n💵 <b>Разом:</b> {total:.2f} грн")
+
+        confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"✅ Так, видалити {len(rows)}", callback_data=f"undo_batch_confirm:{len(rows)}"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data="undo_cancel"),
+        ]])
+
+        await message.answer("\n".join(preview_lines), reply_markup=confirm_keyboard)
+        return
+
     try:
         row = await get_last_transaction()
     except Exception as e:
@@ -217,6 +283,32 @@ async def cmd_undo(message: Message):
         f"📝 <b>Опис:</b> {description}",
         reply_markup=confirm_keyboard
     )
+
+@router.callback_query(F.data.startswith("undo_batch_confirm:"))
+async def cb_undo_batch_confirm(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    n = int(callback.data.split(":", 1)[1])
+    try:
+        deleted_rows = await delete_last_n_transactions(n)
+    except Exception as e:
+        await callback.message.edit_text(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+        await callback.answer()
+        return
+
+    if not deleted_rows:
+        await callback.message.edit_text("📭 Немає записів для видалення.")
+        await callback.answer()
+        return
+
+    # Reset — the batch as a unit is now gone, so a further /undo
+    # should remove just one row again unless another batch is saved.
+    _last_action_count[callback.from_user.id] = 1
+
+    await callback.message.edit_text(f"🗑️ <b>Видалено {len(deleted_rows)} записів.</b>")
+    await callback.answer("Видалено")
 
 @router.callback_query(F.data == "undo_confirm")
 async def cb_undo_confirm(callback: CallbackQuery):
@@ -506,6 +598,110 @@ async def cmd_budget(message: Message):
 
     await message.answer("\n".join(lines), reply_markup=main_keyboard)
 
+@router.message(Command("export"))
+async def cmd_export(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    try:
+        rows = await get_all_transactions()
+    except Exception as e:
+        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    if not rows:
+        await message.answer("📭 У таблиці ще немає жодного запису.", reply_markup=main_keyboard)
+        return
+
+    csv_text = build_csv(rows)
+    # utf-8-sig BOM so Excel opens Cyrillic text correctly by default
+    file_bytes = csv_text.encode("utf-8-sig")
+    filename = f"transactions_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+
+    await message.answer_document(
+        BufferedInputFile(file_bytes, filename=filename),
+        caption=f"📄 Експортовано {len(rows)} записів.",
+        reply_markup=main_keyboard
+    )
+
+@router.message(Command("find"))
+async def cmd_find(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(
+            "❌ <b>Формат:</b> <code>/find кафе</code>",
+            reply_markup=main_keyboard
+        )
+        return
+
+    query = parts[1].strip()
+    try:
+        rows = await get_all_transactions()
+    except Exception as e:
+        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    matches = filter_transactions(rows, query)
+    if not matches:
+        await message.answer(f"🔍 Нічого не знайдено за запитом «{query}».", reply_markup=main_keyboard)
+        return
+
+    total = 0.0
+    for row in matches:
+        try:
+            total += float(str(row[3]).replace(",", "."))
+        except (ValueError, IndexError):
+            pass
+
+    MAX_SHOWN = 20
+    shown = matches[-MAX_SHOWN:]
+    truncated_note = f" (показано останні {MAX_SHOWN})" if len(matches) > MAX_SHOWN else ""
+
+    lines = [f"🔍 <b>Знайдено {len(matches)} записів за «{query}»{truncated_note}:</b>\n"]
+    for row in shown:
+        padded = row + ["-"] * (5 - len(row))
+        date, type_tr, category, amount, description = padded[:5]
+        icon = "💰" if type_tr == "Income" else "📉"
+        lines.append(f"{icon} {date} | {category}: {amount} грн | {description}")
+    lines.append(f"\n💵 <b>Загальна сума:</b> {total:.2f} грн")
+
+    await message.answer("\n".join(lines), reply_markup=main_keyboard)
+
+@router.message(Command("remind"))
+async def cmd_remind(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    args = message.text.split()[1:]
+    if not args:
+        status = "🔔 увімкнені" if reminder.is_enabled() else "🔕 вимкнені"
+        await message.answer(
+            f"Нагадування зараз {status} (щодня о 21:00).\n\n"
+            "<code>/remind on</code> — увімкнути\n"
+            "<code>/remind off</code> — вимкнути",
+            reply_markup=main_keyboard
+        )
+        return
+
+    sub = args[0].lower()
+    if sub in ("on", "увімкнути"):
+        reminder.set_enabled(True)
+        await message.answer("🔔 Нагадування увімкнено (щодня о 21:00).", reply_markup=main_keyboard)
+    elif sub in ("off", "вимкнути"):
+        reminder.set_enabled(False)
+        await message.answer("🔕 Нагадування вимкнено.", reply_markup=main_keyboard)
+    else:
+        await message.answer(
+            "❌ <b>Формат:</b> <code>/remind on</code> або <code>/remind off</code>",
+            reply_markup=main_keyboard
+        )
+
 @router.callback_query(F.data.startswith("entry_confirm:"))
 async def cb_entry_confirm(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
@@ -524,6 +720,7 @@ async def cb_entry_confirm(callback: CallbackQuery):
         transaction_data = {k: v for k, v in entry.items() if k != "is_duplicate"}
         await append_transaction(**transaction_data)
         _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
+        _last_action_count[callback.from_user.id] = 1
         icon = "💰" if entry["type_tr"] == "Income" else "📉"
         await callback.message.edit_text(
             f"✅ <b>Запис успішно додано!</b>\n\n"
@@ -632,6 +829,50 @@ async def cb_back_to_preview(callback: CallbackQuery):
     )
     await callback.answer()
 
+@router.callback_query(F.data.startswith("batch_confirm:"))
+async def cb_batch_confirm(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    batch_id = callback.data.split(":", 1)[1]
+    entries = pending_batches.pop(batch_id, None)
+    if not entries:
+        await callback.answer("⌛ Записи застаріли, спробуй ще раз.", show_alert=True)
+        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакції ще раз.")
+        return
+
+    saved = 0
+    for entry in entries:
+        try:
+            await append_transaction(
+                date=entry["date"], type_tr=entry["type_tr"], category=entry["category"],
+                amount=entry["amount"], description=entry["description"]
+            )
+            _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
+            saved += 1
+        except Exception:
+            pass  # continue trying the rest; report the final count below
+
+    if saved == len(entries):
+        _last_action_count[callback.from_user.id] = saved
+        await callback.message.edit_text(f"✅ <b>Збережено всі {saved} записів!</b>")
+        await callback.answer("Збережено")
+    else:
+        if saved > 0:
+            _last_action_count[callback.from_user.id] = saved
+        await callback.message.edit_text(
+            f"⚠️ <b>Збережено {saved} з {len(entries)} записів.</b> Решта не записалась через помилку."
+        )
+        await callback.answer()
+
+@router.callback_query(F.data.startswith("batch_cancel:"))
+async def cb_batch_cancel(callback: CallbackQuery):
+    batch_id = callback.data.split(":", 1)[1]
+    pending_batches.pop(batch_id, None)
+    await callback.message.edit_text("❌ Скасовано — жоден запис не додано.")
+    await callback.answer()
+
 @router.message(F.text)
 async def handle_financial_entry(message: Message):
     if not is_owner(message.from_user.id):
@@ -655,6 +896,40 @@ async def handle_financial_entry(message: Message):
             _build_preview_text(entry),
             reply_markup=_build_preview_keyboard(entry_id)
         )
+        return
+
+    # Multi-line input: treat each non-empty line as a separate
+    # transaction to confirm and save together.
+    lines = [line.strip() for line in message.text.split("\n") if line.strip()]
+    if len(lines) > 1:
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        entries, failed_lines = parse_multiline_message(message.text, current_date)
+
+        if not entries:
+            await message.answer(
+                "❌ <b>Жоден рядок не вдалося розпізнати.</b> Спробуй формат: <code>500 Продукти</code>"
+            )
+            return
+
+        batch_id = _store_pending_batch(entries)
+
+        preview_lines = [f"👀 <b>Перевір {len(entries)} записів перед збереженням:</b>\n"]
+        for entry in entries:
+            icon = "💰" if entry["type_tr"] == "Income" else "📉"
+            preview_lines.append(
+                f"{icon} {entry['category']}: {entry['amount']} грн — {entry['description']}"
+            )
+        if failed_lines:
+            preview_lines.append(f"\n⚠️ <b>Не розпізнано ({len(failed_lines)}):</b>")
+            for line in failed_lines:
+                preview_lines.append(f"• {line}")
+
+        batch_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"✅ Зберегти всі ({len(entries)})", callback_data=f"batch_confirm:{batch_id}"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"batch_cancel:{batch_id}"),
+        ]])
+
+        await message.answer("\n".join(preview_lines), reply_markup=batch_keyboard)
         return
 
     parsed_data = parse_financial_message(message.text)

@@ -1,6 +1,6 @@
 import pytest
 
-from core.validator import parse_financial_message
+from core.validator import parse_financial_message, parse_multiline_message
 
 
 def test_amount_before_category_and_description():
@@ -80,3 +80,38 @@ def test_before_and_after_text_category_capitalized():
     assert result[1] == "Поповнення рахунку"
     assert result[2] == 250.0
     assert result[3] == "Київстар"
+
+
+def test_parse_multiline_all_valid():
+    text = "150 Обіди\n220 Таксі\n50 Кава"
+    entries, failed = parse_multiline_message(text, "2026-07-26")
+    assert len(entries) == 3
+    assert failed == []
+    assert entries[0]["category"] == "Обіди"
+    assert entries[0]["amount"] == 150.0
+    assert entries[1]["category"] == "Таксі"
+
+
+def test_parse_multiline_skips_unparsable_lines():
+    text = "150 Обіди\nце не транзакція\n50 Кава"
+    entries, failed = parse_multiline_message(text, "2026-07-26")
+    assert len(entries) == 2
+    assert failed == ["це не транзакція"]
+
+
+def test_parse_multiline_all_invalid():
+    text = "привіт\nяк справи"
+    entries, failed = parse_multiline_message(text, "2026-07-26")
+    assert entries == []
+    assert len(failed) == 2
+
+
+def test_parse_multiline_ignores_blank_lines():
+    text = "150 Обіди\n\n\n220 Таксі"
+    entries, failed = parse_multiline_message(text, "2026-07-26")
+    assert len(entries) == 2
+
+
+def test_parse_multiline_uses_given_date():
+    entries, _ = parse_multiline_message("150 Обіди", "2026-01-01")
+    assert entries[0]["date"] == "2026-01-01"

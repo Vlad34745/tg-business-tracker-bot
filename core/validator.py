@@ -77,3 +77,32 @@ def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
         type_tr = "Expense"
 
     return type_tr, category, amount, description
+
+
+def parse_multiline_message(text: str, current_date: str) -> Tuple[list, list]:
+    """
+    Parses a message containing multiple transactions, one per line
+    (e.g. a batch paste like "150 Обіди\n220 Таксі\n50 Кава").
+
+    Returns:
+        (entries, failed_lines) where entries is a list of dicts ready
+        for append_transaction (date/type_tr/category/amount/description),
+        and failed_lines is the raw text of any line that couldn't be
+        parsed, so the caller can tell the user what was skipped.
+    """
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    entries = []
+    failed_lines = []
+
+    for line in lines:
+        parsed = parse_financial_message(line)
+        if parsed:
+            type_tr, category, amount, description = parsed
+            entries.append({
+                "date": current_date, "type_tr": type_tr, "category": category,
+                "amount": amount, "description": description
+            })
+        else:
+            failed_lines.append(line)
+
+    return entries, failed_lines

@@ -1,0 +1,34 @@
+from core.search import filter_transactions
+
+SAMPLE_ROWS = [
+    ["25.07.2026", "Expense", "Кафе", 150, "-"],
+    ["24.07.2026", "Expense", "Таксі", 220, "центр"],
+    ["23.07.2026", "Income", "Зарплата", 25000, "-"],
+    ["22.07.2026", "Expense", "Продукти", 450, "кафе на розі"],
+]
+
+
+def test_filter_matches_category_case_insensitive():
+    result = filter_transactions(SAMPLE_ROWS, "кафе")
+    assert len(result) == 2  # matches "Кафе" category AND "кафе на розі" description
+
+
+def test_filter_matches_description():
+    result = filter_transactions(SAMPLE_ROWS, "центр")
+    assert len(result) == 1
+    assert result[0][2] == "Таксі"
+
+
+def test_filter_no_match():
+    result = filter_transactions(SAMPLE_ROWS, "неіснуюча категорія")
+    assert result == []
+
+
+def test_filter_empty_query_returns_empty():
+    assert filter_transactions(SAMPLE_ROWS, "") == []
+    assert filter_transactions(SAMPLE_ROWS, "   ") == []
+
+
+def test_filter_ignores_malformed_rows():
+    rows = [["25.07.2026", "Expense"]]  # missing category
+    assert filter_transactions(rows, "кафе") == []

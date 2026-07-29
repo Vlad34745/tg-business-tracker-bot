@@ -138,6 +138,83 @@ async def delete_last_transaction():
     return await asyncio.to_thread(sync_worker)
 
 
+async def get_last_n_transactions(n: int = 1):
+    """
+    Fetches the last N rows from the Transactions sheet (most recent
+    last, same order as they appear in the sheet). Returns fewer than
+    N rows if the sheet has fewer than N rows total, or an empty list
+    if there's no data at all.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Transactions!A:E",
+            valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING"
+        ).execute()
+        rows = result.get("values", [])
+        return rows[-n:] if rows else []
+
+    return await asyncio.to_thread(sync_worker)
+
+
+async def delete_last_n_transactions(n: int = 1):
+    """
+    Deletes the last N rows from the Transactions sheet in one batch
+    operation (used to undo a multi-entry save as a single unit).
+
+    Returns:
+        The deleted rows' data (list of lists), or an empty list if
+        the sheet had no data rows to delete.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+
+        metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheet_id = None
+        for tab in metadata.get("sheets", []):
+            if tab["properties"]["title"] == "Transactions":
+                sheet_id = tab["properties"]["sheetId"]
+                break
+        if sheet_id is None:
+            raise ValueError("Sheet tab 'Transactions' not found in the spreadsheet.")
+
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Transactions!A:E",
+            valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING"
+        ).execute()
+        rows = result.get("values", [])
+        if not rows:
+            return []
+
+        n_actual = min(n, len(rows))
+        deleted_rows = rows[-n_actual:]
+        start_index = len(rows) - n_actual
+        end_index = len(rows)
+
+        delete_request = {
+            "requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id, "dimension": "ROWS",
+                        "startIndex": start_index, "endIndex": end_index
+                    }
+                }
+            }]
+        }
+        sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body=delete_request).execute()
+
+        return deleted_rows
+
+    return await asyncio.to_thread(sync_worker)
+
+
 async def get_all_transactions():
     """
     Asynchronously fetches every transaction row from the sheet.

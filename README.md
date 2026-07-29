@@ -9,11 +9,15 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - ⚠️ **Duplicate Warning:** Flags a pending entry if a transaction with the same type/category/amount was saved in the last 2 minutes, to catch accidental double-sends.
 - 💼 **`/budget` Command:** Set monthly spending limits per category (`/budget set Кафе 1000`), see current usage vs. limits, and get an over-budget warning inside `/report`.
 - 📈 **Report Chart:** Every `/report` sends a horizontal bar chart image of the top spending categories alongside the text summary.
+- 📄 **`/export` Command:** Downloads every transaction as a CSV file (UTF-8 with BOM, opens correctly in Excel with Cyrillic text).
+- 🔍 **`/find` Command:** Search transactions by category or description (`/find кафе`), with a running total of matches.
+- 🔔 **`/remind` Command:** Optional daily reminder (21:00) to log expenses, toggled with `/remind on` / `/remind off`.
+- ✨ **Multi-Entry Input:** Paste several transactions at once (one per line) and confirm/save them all together.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
 - 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
-- 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal.
+- 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal. If the last save was a multi-entry batch, undoes the whole batch as one unit.
 - 📊 **`/report` Command:** Income/expense summary with balance and top spending categories. Defaults to the current month, or specify a period: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days), `/report 2week`, `/report 1month`. Add `full` to list every category, or `topN` (e.g. `top10`) to choose how many to show — the chart image always matches.
 - Windows automation setup included via batch scripting (`.bat`).
 
@@ -31,7 +35,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
 
 ## 🧪 Running Tests
-Unit tests cover the message-parsing logic in `core/validator.py`, the monthly report aggregation in `core/report.py`, and budget comparison in `core/budget.py`:
+Unit tests cover the message-parsing logic in `core/validator.py`, monthly report aggregation in `core/report.py`, budget comparison in `core/budget.py`, chart generation in `core/chart.py`, CSV export in `core/export.py`, and search filtering in `core/search.py`:
 ```
 pip install pytest
 pytest tests/ -v

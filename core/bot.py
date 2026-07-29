@@ -9,7 +9,8 @@ from aiogram.types import BotCommand
 from dotenv import load_dotenv
 
 # Import the main router from handlers
-from core.handlers import router as main_router
+from core.handlers import router as main_router, ALLOWED_IDS
+from core.reminder import reminder_loop
 
 load_dotenv()
 
@@ -49,7 +50,16 @@ async def main():
         BotCommand(command="undo", description="Видалити останній запис"),
         BotCommand(command="report", description="Звіт: місяць/тиждень/день (напр. /report 7d)"),
         BotCommand(command="budget", description="Ліміти по категоріях (/budget set Кафе 1000)"),
+        BotCommand(command="export", description="Експорт усіх записів у CSV"),
+        BotCommand(command="find", description="Пошук записів (/find кафе)"),
+        BotCommand(command="remind", description="Нагадування о 21:00 (/remind on/off)"),
     ])
+
+    # Background task: sends a daily reminder to log expenses if enabled
+    if ALLOWED_IDS:
+        asyncio.create_task(reminder_loop(bot, ALLOWED_IDS))
+    else:
+        logger.warning("ALLOWED_USER_ID not set — daily reminder task not started.")
 
     logger.info("Bot is starting up... Beginning long polling.")
     
