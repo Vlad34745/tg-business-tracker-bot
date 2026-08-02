@@ -4,7 +4,7 @@ from datetime import date
 
 from core.report import (
     compute_monthly_report, format_month_label, get_frequent_categories,
-    compute_period_report, format_period_label
+    compute_period_report, format_period_label, subtract_months
 )
 
 
@@ -146,3 +146,24 @@ def test_format_period_label_range():
 
 def test_format_period_label_single_day():
     assert format_period_label(date(2026, 7, 26), date(2026, 7, 26)) == "26.07.2026"
+
+
+def test_subtract_months_simple():
+    assert subtract_months(date(2026, 8, 2), 2) == date(2026, 6, 2)
+
+
+def test_subtract_months_crosses_year_boundary():
+    assert subtract_months(date(2026, 1, 31), 1) == date(2025, 12, 31)
+
+
+def test_subtract_months_clamps_to_shorter_month():
+    # March 31 minus 1 month -> Feb 28 (2026 is not a leap year)
+    assert subtract_months(date(2026, 3, 31), 1) == date(2026, 2, 28)
+
+
+def test_subtract_months_zero_returns_same_date():
+    assert subtract_months(date(2026, 7, 15), 0) == date(2026, 7, 15)
+
+
+def test_subtract_months_multiple_years_back():
+    assert subtract_months(date(2026, 3, 1), 15) == date(2024, 12, 1)

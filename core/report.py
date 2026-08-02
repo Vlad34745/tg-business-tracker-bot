@@ -1,3 +1,4 @@
+import calendar
 from datetime import datetime, date
 from typing import Optional, Callable
 
@@ -119,6 +120,21 @@ def format_period_label(start: date, end: date) -> str:
     if start == end:
         return start.strftime("%d.%m.%Y")
     return f"{start.strftime('%d.%m.%Y')} – {end.strftime('%d.%m.%Y')}"
+
+
+def subtract_months(d: date, months: int) -> date:
+    """
+    Subtract a number of calendar months from a date, clamping the day
+    to the target month's actual length (e.g. 31.03 minus 1 month is
+    28.02, not an invalid 31.02). Used for "/report 2month"-style
+    periods so "2 months" means two real calendar months, not a flat
+    60-day guess.
+    """
+    total_month_index = d.month - 1 - months
+    year = d.year + total_month_index // 12
+    month = total_month_index % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 def get_frequent_categories(rows: list, limit: int = 6) -> list:
