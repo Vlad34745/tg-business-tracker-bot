@@ -86,6 +86,17 @@ awaiting_category_text: dict = {}
 # instead of a new transaction.
 awaiting_report_args: dict = {}
 
+# Maps a period-picker button choice to the equivalent /report arguments.
+PERIOD_ARGS_MAP = {
+    "today": ["today"], "week": ["week"], "month": [],
+    "2month": ["2month"], "year": ["year"],
+}
+
+# Tracks users who tapped "✏️ Своє число" under the category-count step:
+# user_id -> the period choice they already picked. Their next free-text
+# message is parsed as the top-N number to combine with that period.
+awaiting_report_topn: dict = {}
+
 # Tracks recently *saved* transactions per user, to warn about likely
 # accidental duplicates (e.g. a double-tap or a flaky connection
 # resending the same message). Not a hard block — just a warning banner
@@ -178,7 +189,8 @@ async def cmd_start(message: Message):
         "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
         "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
         "   Якщо востаннє зберігав кілька записів разом — видалить усі відразу.\n"
-        "📊 Команда <code>/report</code> (без параметрів) покаже вибір періоду кнопками.\n"
+        "📊 Команда <code>/report</code> (без параметрів) покаже вибір періоду кнопками,\n"
+        "   а потім кількість категорій (Топ-5/10/15/повний список/своє число) — все тапами.\n"
         "   Текстом теж можна одразу: <code>/report 6</code> (червень), <code>/report 6 2026</code>,\n"
         "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>,\n"
         "   <code>/report 2week</code>, <code>/report 1month</code>, <code>/report year</code>.\n"
@@ -992,7 +1004,6 @@ async def cb_nav_undo(callback: CallbackQuery):
         reply_markup=confirm_keyboard
     )
 
-@router.callback_query(F.data == "nav:report")
 def _report_period_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -1009,6 +1020,7 @@ def _report_period_keyboard() -> InlineKeyboardMarkup:
         ],
     ])
 
+@router.callback_query(F.data == "nav:report")
 async def cb_nav_report(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
@@ -1034,11 +1046,41 @@ async def cb_report_period(callback: CallbackQuery):
         )
         return
 
-    period_args_map = {
-        "today": ["today"], "week": ["week"], "month": [],
-        "2month": ["2month"], "year": ["year"],
-    }
-    args = period_args_map.get(choice, [])
+    await callback.answer()
+    top_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Топ-5", callback_data=f"report_gen:{choice}:top5"),
+            InlineKeyboardButton(text="Топ-10", callback_data=f"report_gen:{choice}:top10"),
+        ],
+        [
+            InlineKeyboardButton(text="Топ-15", callback_data=f"report_gen:{choice}:top15"),
+            InlineKeyboardButton(text="Повний список", callback_data=f"report_gen:{choice}:full"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Своє число", callback_data=f"report_gen:{choice}:customtop"),
+        ],
+    ])
+    await callback.message.edit_text("🏷️ <b>Скільки категорій показати?</b>", reply_markup=top_keyboard)
+
+@router.callback_query(F.data.startswith("report_gen:"))
+async def cb_report_generate(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    _, period_choice, top_choice = callback.data.split(":", 2)
+
+    if top_choice == "customtop":
+        awaiting_report_topn[callback.from_user.id] = period_choice
+        await callback.answer()
+        await callback.message.edit_text("✏️ Напиши число — скільки категорій показати (наприклад <code>7</code>):")
+        return
+
+    args = list(PERIOD_ARGS_MAP.get(period_choice, []))
+    if top_choice == "full":
+        args.append("full")
+    elif top_choice != "top5":  # top5 is already the default, no extra arg needed
+        args.append(top_choice)
 
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)  # remove the picker buttons
@@ -1124,6 +1166,20 @@ async def handle_financial_entry(message: Message):
         awaiting_report_args.pop(user_id)
         text = message.text.strip()
         args = [] if text == "." else text.split()
+        await _generate_report(user_id, args, message.answer, message.answer_photo)
+        return
+
+    if user_id in awaiting_report_topn:
+        period_choice = awaiting_report_topn.pop(user_id)
+        text = message.text.strip()
+        try:
+            n = int(text)
+            if n < 1:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ <b>Напиши ціле число більше 0</b>, наприклад <code>7</code>.")
+            return
+        args = list(PERIOD_ARGS_MAP.get(period_choice, [])) + [f"top{n}"]
         await _generate_report(user_id, args, message.answer, message.answer_photo)
         return
 

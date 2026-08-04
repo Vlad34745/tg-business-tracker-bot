@@ -13,12 +13,13 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - 🔍 **`/find` Command:** Search transactions by category or description (`/find кафе`), with a running total of matches.
 - 🔔 **`/remind` Command:** Optional daily reminder (21:00) to log expenses, toggled with `/remind on` / `/remind off`.
 - ✨ **Multi-Entry Input:** Paste several transactions at once (one per line) and confirm/save them all together.
+- ⚡ **Quick-Action Menu:** Inline buttons (📋 Останній, 🗑 Undo, 📊 Звіт, 💼 Бюджет, 📄 Експорт) attached to key responses for one-tap navigation, without a permanently-visible bottom keyboard.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
 - 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
 - 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal. If the last save was a multi-entry batch, undoes the whole batch as one unit.
-- 📊 **`/report` Command:** Plain `/report` (typed, tapped from the Menu button, or "📊 Звіт") shows a button-based period picker (today/week/month/2 months/year/custom) — no default fallback, no typing needed. Passing arguments still works directly: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days), `/report 2week`, `/report 2month` (calendar-accurate), `/report year`. Add `full` to list every category, or `topN` (e.g. `top10`) to choose how many to show — the chart image always matches.
+- 📊 **`/report` Command:** Plain `/report` (typed, tapped from the Menu button, or "📊 Звіт") shows a two-step button picker — period first (today/week/month/2 months/year/custom), then category count (Top-5/10/15/full list/custom number) — no typing needed. Passing arguments still works directly: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days), `/report 2week`, `/report 2month` (calendar-accurate), `/report year`, `full`, `topN`. The chart image always matches the chosen category count.
 - Windows automation setup included via batch scripting (`.bat`).
 
 ## 🛠️ Tech Stack
