@@ -7,13 +7,13 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - ✅ **Confirm Before Save:** Every parsed entry is shown as a preview with inline ✅/❌ buttons before it's written to the sheet.
 - ✏️ **Edit Category On the Fly:** Pick from your most-used categories via quick buttons, or type a custom one, right from the confirmation preview.
 - ⚠️ **Duplicate Warning:** Flags a pending entry if a transaction with the same type/category/amount was saved in the last 2 minutes, to catch accidental double-sends.
-- 💼 **`/budget` Command:** Set monthly spending limits per category (`/budget set Кафе 1000`), see current usage vs. limits, and get an over-budget warning inside `/report`.
+- 💼 **`/budget` Command:** Set monthly spending limits per category. Plain `/budget` shows a button menu (view/add/remove) — pick a category from your most-used ones or type your own, then just type the amount. Text shortcuts still work: `/budget set Кафе 1000`, `/budget remove Кафе`. Get an over-budget warning inside `/report`.
 - 📈 **Report Chart:** Every `/report` sends a horizontal bar chart image of the top spending categories alongside the text summary.
 - 📄 **`/export` Command:** Downloads every transaction as a CSV file (UTF-8 with BOM, opens correctly in Excel with Cyrillic text).
 - 🔍 **`/find` Command:** Search transactions by category or description (`/find кафе`), with a running total of matches.
-- 🔔 **`/remind` Command:** Optional daily reminder (21:00) to log expenses, toggled with `/remind on` / `/remind off`.
+- 🔔 **`/remind` Command:** Optional daily reminder (21:00) to log expenses. Plain `/remind` shows on/off buttons; `/remind on` / `/remind off` also work directly.
 - ✨ **Multi-Entry Input:** Paste several transactions at once (one per line) and confirm/save them all together.
-- ⚡ **Quick-Action Menu:** Inline buttons (📋 Останній, 🗑 Undo, 📊 Звіт, 💼 Бюджет, 📄 Експорт) attached to key responses for one-tap navigation, without a permanently-visible bottom keyboard.
+- ⚡ **Quick-Action Menu:** `/start` shows one-tap inline buttons (📋 Останній, 🗑 Undo, 📊 Звіт, 💼 Бюджет, 📄 Експорт) — kept to that one message so it doesn't clutter every reply, with no permanently-visible bottom keyboard.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.

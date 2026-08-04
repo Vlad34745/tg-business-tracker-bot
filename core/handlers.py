@@ -97,6 +97,14 @@ PERIOD_ARGS_MAP = {
 # message is parsed as the top-N number to combine with that period.
 awaiting_report_topn: dict = {}
 
+# Tracks users mid-flow setting a budget: user_id -> category, once a
+# category is picked (or typed), waiting for the amount as free text.
+awaiting_budget_amount: dict = {}
+
+# Tracks users who tapped "✏️ Своя категорія" under /budget's add flow:
+# their next free-text message is the category name, not a transaction.
+awaiting_budget_category: dict = {}
+
 # Tracks recently *saved* transactions per user, to warn about likely
 # accidental duplicates (e.g. a double-tap or a flaky connection
 # resending the same message). Not a hard block — just a warning banner
@@ -186,24 +194,13 @@ async def cmd_start(message: Message):
         "• <code>Таксі 220 центр</code>\n\n"
         "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n"
         "Якщо схожий запис уже був нещодавно — попереджу окремо.\n\n"
-        "🔎 Команда <code>/last</code> покаже останній доданий запис.\n"
-        "🗑️ Команда <code>/undo</code> видалить останній запис (з підтвердженням).\n"
-        "   Якщо востаннє зберігав кілька записів разом — видалить усі відразу.\n"
-        "📊 Команда <code>/report</code> (без параметрів) покаже вибір періоду кнопками,\n"
-        "   а потім кількість категорій (Топ-5/10/15/повний список/своє число) — все тапами.\n"
-        "   Текстом теж можна одразу: <code>/report 6</code> (червень), <code>/report 6 2026</code>,\n"
-        "   <code>/report today</code>, <code>/report week</code>, <code>/report 12d</code>,\n"
-        "   <code>/report 2week</code>, <code>/report 1month</code>, <code>/report year</code>.\n"
-        "   Додай <code>full</code> в кінець, щоб побачити всі категорії (за сумою):\n"
-        "   <code>/report full</code>, <code>/report week full</code>.\n"
-        "   Або обери кількість: <code>/report top10</code>, <code>/report week top3</code>.\n"
-        "   Графік завжди відповідає обраній кількості категорій.\n\n"
-        "💼 Команда <code>/budget</code> покаже ліміти й витрати за місяць.\n"
-        "   <code>/budget set Кафе 1000</code> — встановити ліміт.\n"
-        "   <code>/budget remove Кафе</code> — видалити ліміт.\n\n"
-        "📄 Команда <code>/export</code> вивантажить усі записи у CSV.\n"
-        "🔍 Команда <code>/find</code> знайде записи (напр. <code>/find кафе</code>).\n"
-        "🔔 Команда <code>/remind</code> керує щоденним нагадуванням о 21:00.\n\n"
+        "🔎 <code>/last</code> — останній запис.\n"
+        "🗑️ <code>/undo</code> — видалити останній запис (або весь пакет, якщо зберігав кілька разом).\n"
+        "📊 <code>/report</code> — звіт: оберу період і кількість категорій кнопками.\n"
+        "💼 <code>/budget</code> — ліміти по категоріях: перегляд/додавання/видалення кнопками.\n"
+        "📄 <code>/export</code> — усі записи у CSV.\n"
+        "🔍 <code>/find</code> — пошук записів (напр. <code>/find кафе</code>).\n"
+        "🔔 <code>/remind</code> — щоденне нагадування о 21:00, кнопками увімкнути/вимкнути.\n\n"
         "✨ Можна надіслати кілька транзакцій одним повідомленням —\n"
         "   кожну з нового рядка, і я запропоную зберегти всі одразу.\n\n"
         "Спробуй відправити мені будь-яку транзакцію!"
@@ -224,7 +221,7 @@ async def cmd_last(message: Message):
         return
 
     if not row:
-        await message.answer("📭 У таблиці ще немає жодного запису.", reply_markup=_quick_menu_keyboard())
+        await message.answer("📭 У таблиці ще немає жодного запису.")
         return
 
     # Pad the row in case some trailing columns are empty
@@ -237,8 +234,7 @@ async def cmd_last(message: Message):
         f"{icon} <b>Тип:</b> {type_tr}\n"
         f"🏷️ <b>Категорія:</b> {category}\n"
         f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}",
-        reply_markup=_quick_menu_keyboard()
+        f"📝 <b>Опис:</b> {description}"
     )
 
 @router.message(Command("undo"))
@@ -336,7 +332,6 @@ async def cb_undo_batch_confirm(callback: CallbackQuery):
 
     await callback.message.edit_text(f"🗑️ <b>Видалено {len(deleted_rows)} записів.</b>")
     await callback.answer("Видалено")
-    await callback.message.answer("⬇️ Швидкі дії:", reply_markup=_quick_menu_keyboard())
 
 @router.callback_query(F.data == "undo_confirm")
 async def cb_undo_confirm(callback: CallbackQuery):
@@ -358,7 +353,6 @@ async def cb_undo_confirm(callback: CallbackQuery):
 
     await callback.message.edit_text("🗑️ <b>Запис видалено.</b>")
     await callback.answer("Видалено")
-    await callback.message.answer("⬇️ Швидкі дії:", reply_markup=_quick_menu_keyboard())
 
 @router.callback_query(F.data == "undo_cancel")
 async def cb_undo_cancel(callback: CallbackQuery):
@@ -469,7 +463,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
         is_month_mode = True
 
     if summary["count"] == 0:
-        await answer(f"📭 За <b>{period_label}</b> ще немає жодного запису.", reply_markup=_quick_menu_keyboard())
+        await answer(f"📭 За <b>{period_label}</b> ще немає жодного запису.")
         return
 
     balance_icon = "📈" if summary["balance"] >= 0 else "📉"
@@ -515,11 +509,8 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
     )
     if chart_buffer:
         await answer_photo(
-            BufferedInputFile(chart_buffer.read(), filename="report_chart.png"),
-            reply_markup=_quick_menu_keyboard()
+            BufferedInputFile(chart_buffer.read(), filename="report_chart.png")
         )
-    else:
-        await answer("⬇️ Швидкі дії:", reply_markup=_quick_menu_keyboard())
 
 @router.message(Command("report"))
 async def cmd_report(message: Message):
@@ -535,6 +526,46 @@ async def cmd_report(message: Message):
         return
 
     await _generate_report(message.from_user.id, raw_args, message.answer, message.answer_photo)
+
+async def _show_budget_view(user_id: int, answer):
+    try:
+        budgets = parse_budgets_rows(await get_budgets())
+    except Exception as e:
+        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    if not budgets:
+        await answer(
+            "📭 <b>Ліміти ще не встановлені.</b>\n\n"
+            "Тисни «➕ Встановити ліміт» або пиши <code>/budget set Кафе 1000</code>"
+        )
+        return
+
+    try:
+        rows = await get_all_transactions()
+    except Exception as e:
+        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        return
+
+    now = datetime.now()
+    summary = compute_monthly_report(rows, now.year, now.month)
+    spent_by_category = dict(summary["expense_by_category"])
+
+    lines = [f"<b>💼 Бюджет на {format_month_label(now.year, now.month)}</b>\n"]
+    for category, limit in sorted(budgets.items()):
+        spent = spent_by_category.get(category, 0.0)
+        pct = (spent / limit * 100) if limit else 0
+        icon = "🔴" if spent > limit else ("🟡" if pct >= 80 else "🟢")
+        lines.append(f"{icon} <b>{category}:</b> {spent:.2f} / {limit:.2f} грн ({pct:.0f}%)")
+
+    await answer("\n".join(lines))
+
+def _budget_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Переглянути", callback_data="budget_view")],
+        [InlineKeyboardButton(text="➕ Встановити ліміт", callback_data="budget_add")],
+        [InlineKeyboardButton(text="🗑 Видалити ліміт", callback_data="budget_remove")],
+    ])
 
 @router.message(Command("budget"))
 async def cmd_budget(message: Message):
@@ -570,8 +601,7 @@ async def cmd_budget(message: Message):
             return
 
         await message.answer(
-            f"✅ Ліміт для <b>{category}</b> встановлено: {limit:.2f} грн/міс",
-            reply_markup=_quick_menu_keyboard()
+            f"✅ Ліміт для <b>{category}</b> встановлено: {limit:.2f} грн/міс"
         )
         return
 
@@ -590,9 +620,9 @@ async def cmd_budget(message: Message):
             return
 
         if deleted:
-            await message.answer(f"🗑️ Ліміт для <b>{category}</b> видалено.", reply_markup=_quick_menu_keyboard())
+            await message.answer(f"🗑️ Ліміт для <b>{category}</b> видалено.")
         else:
-            await message.answer(f"📭 Ліміт для <b>{category}</b> не знайдено.", reply_markup=_quick_menu_keyboard())
+            await message.answer(f"📭 Ліміт для <b>{category}</b> не знайдено.")
         return
 
     if args:
@@ -604,39 +634,105 @@ async def cmd_budget(message: Message):
         )
         return
 
-    # No args: show current budgets vs. this month's spending
-    try:
-        budgets = parse_budgets_rows(await get_budgets())
-    except Exception as e:
-        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
-        return
+    # No args: show a button menu instead of jumping straight to the view
+    await message.answer("💼 <b>Бюджет — що робимо?</b>", reply_markup=_budget_menu_keyboard())
 
-    if not budgets:
-        await message.answer(
-            "📭 <b>Ліміти ще не встановлені.</b>\n\n"
-            "Встанови перший: <code>/budget set Кафе 1000</code>",
-            reply_markup=_quick_menu_keyboard()
-        )
+@router.callback_query(F.data == "budget_view")
+async def cb_budget_view(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
         return
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _show_budget_view(callback.from_user.id, callback.message.answer)
+
+@router.callback_query(F.data == "budget_add")
+async def cb_budget_add(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    await callback.answer()
 
     try:
         rows = await get_all_transactions()
+        top_categories = get_frequent_categories(rows, limit=6)
+    except Exception:
+        top_categories = []
+
+    buttons = [
+        [InlineKeyboardButton(text=cat, callback_data=f"budget_set_cat:{cat}")]
+        for cat in top_categories
+    ]
+    buttons.append([InlineKeyboardButton(text="✏️ Своя категорія", callback_data="budget_set_cat_custom")])
+    await callback.message.edit_text(
+        "🏷️ <b>Для якої категорії встановити ліміт?</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+@router.callback_query(F.data.startswith("budget_set_cat:"))
+async def cb_budget_set_category(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    category = callback.data.split(":", 1)[1]
+    awaiting_budget_amount[callback.from_user.id] = category
+    await callback.answer()
+    await callback.message.edit_text(f"💵 Напиши суму ліміту для <b>{category}</b> (напр. <code>1000</code>):")
+
+@router.callback_query(F.data == "budget_set_cat_custom")
+async def cb_budget_set_category_custom(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    awaiting_budget_category[callback.from_user.id] = True
+    await callback.answer()
+    await callback.message.edit_text("✏️ Напиши назву категорії:")
+
+@router.callback_query(F.data == "budget_remove")
+async def cb_budget_remove(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    await callback.answer()
+
+    try:
+        budgets = parse_budgets_rows(await get_budgets())
     except Exception as e:
-        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await callback.message.edit_text(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
         return
 
-    now = datetime.now()
-    summary = compute_monthly_report(rows, now.year, now.month)
-    spent_by_category = dict(summary["expense_by_category"])
+    if not budgets:
+        await callback.message.edit_text("📭 Ліміти ще не встановлені — нічого видаляти.")
+        return
 
-    lines = [f"<b>💼 Бюджет на {format_month_label(now.year, now.month)}</b>\n"]
-    for category, limit in sorted(budgets.items()):
-        spent = spent_by_category.get(category, 0.0)
-        pct = (spent / limit * 100) if limit else 0
-        icon = "🔴" if spent > limit else ("🟡" if pct >= 80 else "🟢")
-        lines.append(f"{icon} <b>{category}:</b> {spent:.2f} / {limit:.2f} грн ({pct:.0f}%)")
+    buttons = [
+        [InlineKeyboardButton(text=f"{cat} ({limit:.0f} грн)", callback_data=f"budget_del_cat:{cat}")]
+        for cat in sorted(budgets.keys())
+    ]
+    await callback.message.edit_text(
+        "🗑 <b>Який ліміт видалити?</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
 
-    await message.answer("\n".join(lines), reply_markup=_quick_menu_keyboard())
+@router.callback_query(F.data.startswith("budget_del_cat:"))
+async def cb_budget_delete_category(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+
+    category = callback.data.split(":", 1)[1]
+    try:
+        deleted = await delete_budget(category)
+    except Exception as e:
+        await callback.message.edit_text(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+        await callback.answer()
+        return
+
+    await callback.answer("Видалено" if deleted else "Не знайдено")
+    if deleted:
+        await callback.message.edit_text(f"🗑️ Ліміт для <b>{category}</b> видалено.")
+    else:
+        await callback.message.edit_text(f"📭 Ліміт для <b>{category}</b> не знайдено.")
 
 @router.message(Command("export"))
 async def cmd_export(message: Message):
@@ -651,7 +747,7 @@ async def cmd_export(message: Message):
         return
 
     if not rows:
-        await message.answer("📭 У таблиці ще немає жодного запису.", reply_markup=_quick_menu_keyboard())
+        await message.answer("📭 У таблиці ще немає жодного запису.")
         return
 
     csv_text = build_csv(rows)
@@ -661,8 +757,7 @@ async def cmd_export(message: Message):
 
     await message.answer_document(
         BufferedInputFile(file_bytes, filename=filename),
-        caption=f"📄 Експортовано {len(rows)} записів.",
-        reply_markup=_quick_menu_keyboard()
+        caption=f"📄 Експортовано {len(rows)} записів."
     )
 
 @router.message(Command("find"))
@@ -687,7 +782,7 @@ async def cmd_find(message: Message):
 
     matches = filter_transactions(rows, query)
     if not matches:
-        await message.answer(f"🔍 Нічого не знайдено за запитом «{query}».", reply_markup=_quick_menu_keyboard())
+        await message.answer(f"🔍 Нічого не знайдено за запитом «{query}».")
         return
 
     total = 0.0
@@ -709,7 +804,7 @@ async def cmd_find(message: Message):
         lines.append(f"{icon} {date} | {category}: {amount} грн | {description}")
     lines.append(f"\n💵 <b>Загальна сума:</b> {total:.2f} грн")
 
-    await message.answer("\n".join(lines), reply_markup=_quick_menu_keyboard())
+    await message.answer("\n".join(lines))
 
 @router.message(Command("remind"))
 async def cmd_remind(message: Message):
@@ -720,25 +815,45 @@ async def cmd_remind(message: Message):
     args = message.text.split()[1:]
     if not args:
         status = "🔔 увімкнені" if reminder.is_enabled() else "🔕 вимкнені"
+        remind_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔔 Увімкнути", callback_data="remind_on"),
+            InlineKeyboardButton(text="🔕 Вимкнути", callback_data="remind_off"),
+        ]])
         await message.answer(
-            f"Нагадування зараз {status} (щодня о 21:00).\n\n"
-            "<code>/remind on</code> — увімкнути\n"
-            "<code>/remind off</code> — вимкнути",
-            reply_markup=_quick_menu_keyboard()
+            f"Нагадування зараз {status} (щодня о 21:00).",
+            reply_markup=remind_keyboard
         )
         return
 
     sub = args[0].lower()
     if sub in ("on", "увімкнути"):
         reminder.set_enabled(True)
-        await message.answer("🔔 Нагадування увімкнено (щодня о 21:00).", reply_markup=_quick_menu_keyboard())
+        await message.answer("🔔 Нагадування увімкнено (щодня о 21:00).")
     elif sub in ("off", "вимкнути"):
         reminder.set_enabled(False)
-        await message.answer("🔕 Нагадування вимкнено.", reply_markup=_quick_menu_keyboard())
+        await message.answer("🔕 Нагадування вимкнено.")
     else:
         await message.answer(
             "❌ <b>Формат:</b> <code>/remind on</code> або <code>/remind off</code>"
         )
+
+@router.callback_query(F.data == "remind_on")
+async def cb_remind_on(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    reminder.set_enabled(True)
+    await callback.answer("Увімкнено")
+    await callback.message.edit_text("🔔 Нагадування увімкнено (щодня о 21:00).")
+
+@router.callback_query(F.data == "remind_off")
+async def cb_remind_off(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    reminder.set_enabled(False)
+    await callback.answer("Вимкнено")
+    await callback.message.edit_text("🔕 Нагадування вимкнено.")
 
 @router.callback_query(F.data.startswith("entry_confirm:"))
 async def cb_entry_confirm(callback: CallbackQuery):
@@ -925,7 +1040,7 @@ async def cb_nav_last(callback: CallbackQuery):
         return
 
     if not row:
-        await callback.message.answer("📭 У таблиці ще немає жодного запису.", reply_markup=_quick_menu_keyboard())
+        await callback.message.answer("📭 У таблиці ще немає жодного запису.")
         return
 
     date, type_tr, category, amount, description = _format_transaction(row)
@@ -936,8 +1051,7 @@ async def cb_nav_last(callback: CallbackQuery):
         f"{icon} <b>Тип:</b> {type_tr}\n"
         f"🏷️ <b>Категорія:</b> {category}\n"
         f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}",
-        reply_markup=_quick_menu_keyboard()
+        f"📝 <b>Опис:</b> {description}"
     )
 
 @router.callback_query(F.data == "nav:undo")
@@ -1092,39 +1206,7 @@ async def cb_nav_budget(callback: CallbackQuery):
         await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
         return
     await callback.answer()
-
-    try:
-        budgets = parse_budgets_rows(await get_budgets())
-    except Exception as e:
-        await callback.message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
-        return
-
-    if not budgets:
-        await callback.message.answer(
-            "📭 <b>Ліміти ще не встановлені.</b>\n\n"
-            "Встанови перший: <code>/budget set Кафе 1000</code>",
-            reply_markup=_quick_menu_keyboard()
-        )
-        return
-
-    try:
-        rows = await get_all_transactions()
-    except Exception as e:
-        await callback.message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
-        return
-
-    now = datetime.now()
-    summary = compute_monthly_report(rows, now.year, now.month)
-    spent_by_category = dict(summary["expense_by_category"])
-
-    lines = [f"<b>💼 Бюджет на {format_month_label(now.year, now.month)}</b>\n"]
-    for category, limit in sorted(budgets.items()):
-        spent = spent_by_category.get(category, 0.0)
-        pct = (spent / limit * 100) if limit else 0
-        icon = "🔴" if spent > limit else ("🟡" if pct >= 80 else "🟢")
-        lines.append(f"{icon} <b>{category}:</b> {spent:.2f} / {limit:.2f} грн ({pct:.0f}%)")
-
-    await callback.message.answer("\n".join(lines), reply_markup=_quick_menu_keyboard())
+    await callback.message.answer("💼 <b>Бюджет — що робимо?</b>", reply_markup=_budget_menu_keyboard())
 
 @router.callback_query(F.data == "nav:export")
 async def cb_nav_export(callback: CallbackQuery):
@@ -1140,7 +1222,7 @@ async def cb_nav_export(callback: CallbackQuery):
         return
 
     if not rows:
-        await callback.message.answer("📭 У таблиці ще немає жодного запису.", reply_markup=_quick_menu_keyboard())
+        await callback.message.answer("📭 У таблиці ще немає жодного запису.")
         return
 
     csv_text = build_csv(rows)
@@ -1148,8 +1230,7 @@ async def cb_nav_export(callback: CallbackQuery):
     filename = f"transactions_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     await callback.message.answer_document(
         BufferedInputFile(file_bytes, filename=filename),
-        caption=f"📄 Експортовано {len(rows)} записів.",
-        reply_markup=_quick_menu_keyboard()
+        caption=f"📄 Експортовано {len(rows)} записів."
     )
 
 @router.message(F.text)
@@ -1181,6 +1262,34 @@ async def handle_financial_entry(message: Message):
             return
         args = list(PERIOD_ARGS_MAP.get(period_choice, [])) + [f"top{n}"]
         await _generate_report(user_id, args, message.answer, message.answer_photo)
+        return
+
+    if user_id in awaiting_budget_category:
+        awaiting_budget_category.pop(user_id)
+        category_raw = message.text.strip()
+        category = category_raw[0].upper() + category_raw[1:] if category_raw else category_raw
+        if not category:
+            await message.answer("❌ Назва категорії не може бути порожньою.")
+            return
+        awaiting_budget_amount[user_id] = category
+        await message.answer(f"💵 Напиши суму ліміту для <b>{category}</b> (напр. <code>1000</code>):")
+        return
+
+    if user_id in awaiting_budget_amount:
+        category = awaiting_budget_amount.pop(user_id)
+        try:
+            limit = float(message.text.strip().replace(",", "."))
+            if limit <= 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("❌ <b>Напиши додатне число</b>, наприклад <code>1000</code>.")
+            return
+        try:
+            await set_budget(category, limit)
+        except Exception as e:
+            await message.answer(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+            return
+        await message.answer(f"✅ Ліміт для <b>{category}</b> встановлено: {limit:.2f} грн/міс")
         return
 
     if user_id in awaiting_category_text:
