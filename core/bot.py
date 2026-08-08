@@ -51,8 +51,8 @@ async def main():
         BotCommand(command="report", description="Звіт — оберу період і категорії кнопками"),
         BotCommand(command="budget", description="Ліміти по категоріях — керування кнопками"),
         BotCommand(command="export", description="Експорт усіх записів у CSV"),
-        BotCommand(command="find", description="Пошук записів (напр. /find кафе)"),
-        BotCommand(command="remind", description="Нагадування о 21:00 — увімкнути/вимкнути"),
+        BotCommand(command="find", description="Пошук: категорії кнопками або /find текст"),
+        BotCommand(command="remind", description="Нагадування — час(и) і увімк/вимк кнопками"),
     ])
 
     # Background task: sends a daily reminder to log expenses if enabled

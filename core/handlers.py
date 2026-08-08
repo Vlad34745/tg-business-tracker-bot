@@ -105,6 +105,10 @@ awaiting_budget_amount: dict = {}
 # their next free-text message is the category name, not a transaction.
 awaiting_budget_category: dict = {}
 
+# Tracks users who tapped "➕ Додати час" under /remind: their next
+# free-text message is parsed as a HH:MM reminder time, not a transaction.
+awaiting_remind_time: dict = {}
+
 # Tracks recently *saved* transactions per user, to warn about likely
 # accidental duplicates (e.g. a double-tap or a flaky connection
 # resending the same message). Not a hard block — just a warning banner
@@ -199,8 +203,8 @@ async def cmd_start(message: Message):
         "📊 <code>/report</code> — звіт: оберу період і кількість категорій кнопками.\n"
         "💼 <code>/budget</code> — ліміти по категоріях: перегляд/додавання/видалення кнопками.\n"
         "📄 <code>/export</code> — усі записи у CSV.\n"
-        "🔍 <code>/find</code> — пошук записів (напр. <code>/find кафе</code>).\n"
-        "🔔 <code>/remind</code> — щоденне нагадування о 21:00, кнопками увімкнути/вимкнути.\n\n"
+        "🔍 <code>/find</code> — пошук: обери категорію кнопкою або напиши <code>/find текст</code>.\n"
+        "🔔 <code>/remind</code> — нагадування кнопками: увімкнути/вимкнути, додати чи прибрати час.\n\n"
         "✨ Можна надіслати кілька транзакцій одним повідомленням —\n"
         "   кожну з нового рядка, і я запропоную зберегти всі одразу.\n\n"
         "Спробуй відправити мені будь-яку транзакцію!"
@@ -760,29 +764,16 @@ async def cmd_export(message: Message):
         caption=f"📄 Експортовано {len(rows)} записів."
     )
 
-@router.message(Command("find"))
-async def cmd_find(message: Message):
-    if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
-        return
-
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
-        await message.answer(
-            "❌ <b>Формат:</b> <code>/find кафе</code>"
-        )
-        return
-
-    query = parts[1].strip()
+async def _run_find(user_id: int, query: str, answer):
     try:
         rows = await get_all_transactions()
     except Exception as e:
-        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
         return
 
     matches = filter_transactions(rows, query)
     if not matches:
-        await message.answer(f"🔍 Нічого не знайдено за запитом «{query}».")
+        await answer(f"🔍 Нічого не знайдено за запитом «{query}».")
         return
 
     total = 0.0
@@ -804,7 +795,67 @@ async def cmd_find(message: Message):
         lines.append(f"{icon} {date} | {category}: {amount} грн | {description}")
     lines.append(f"\n💵 <b>Загальна сума:</b> {total:.2f} грн")
 
-    await message.answer("\n".join(lines))
+    await answer("\n".join(lines))
+
+@router.message(Command("find"))
+async def cmd_find(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer("🔒 Доступ заблоковано.")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        # No query given — offer buttons for the most-used categories
+        # instead of just erroring out.
+        try:
+            rows = await get_all_transactions()
+            top_categories = get_frequent_categories(rows, limit=8)
+        except Exception:
+            top_categories = []
+
+        if not top_categories:
+            await message.answer("❌ <b>Формат:</b> <code>/find кафе</code>")
+            return
+
+        buttons = [
+            [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{cat}")]
+            for cat in top_categories
+        ]
+        await message.answer(
+            "🔍 <b>Що шукаємо?</b> Обери категорію або напиши свій запит командою "
+            "<code>/find текст</code>:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        )
+        return
+
+    await _run_find(message.from_user.id, parts[1].strip(), message.answer)
+
+@router.callback_query(F.data.startswith("find_cat:"))
+async def cb_find_category(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    query = callback.data.split(":", 1)[1]
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _run_find(callback.from_user.id, query, callback.message.answer)
+
+def _remind_status_text() -> str:
+    status = "🔔 увімкнені" if reminder.is_enabled() else "🔕 вимкнені"
+    times = ", ".join(reminder.get_times())
+    return f"Нагадування зараз {status}.\n⏰ <b>Час(и):</b> {times}"
+
+def _remind_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔔 Увімкнути", callback_data="remind_on"),
+            InlineKeyboardButton(text="🔕 Вимкнути", callback_data="remind_off"),
+        ],
+        [
+            InlineKeyboardButton(text="➕ Додати час", callback_data="remind_add_time"),
+            InlineKeyboardButton(text="🗑 Видалити час", callback_data="remind_remove_time"),
+        ],
+    ])
 
 @router.message(Command("remind"))
 async def cmd_remind(message: Message):
@@ -814,27 +865,27 @@ async def cmd_remind(message: Message):
 
     args = message.text.split()[1:]
     if not args:
-        status = "🔔 увімкнені" if reminder.is_enabled() else "🔕 вимкнені"
-        remind_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔔 Увімкнути", callback_data="remind_on"),
-            InlineKeyboardButton(text="🔕 Вимкнути", callback_data="remind_off"),
-        ]])
-        await message.answer(
-            f"Нагадування зараз {status} (щодня о 21:00).",
-            reply_markup=remind_keyboard
-        )
+        await message.answer(_remind_status_text(), reply_markup=_remind_menu_keyboard())
         return
 
     sub = args[0].lower()
     if sub in ("on", "увімкнути"):
         reminder.set_enabled(True)
-        await message.answer("🔔 Нагадування увімкнено (щодня о 21:00).")
+        await message.answer("🔔 Нагадування увімкнено.")
     elif sub in ("off", "вимкнути"):
         reminder.set_enabled(False)
         await message.answer("🔕 Нагадування вимкнено.")
+    elif sub in ("add",) and len(args) >= 2 and reminder.is_valid_time(args[1]):
+        added = reminder.add_time(args[1])
+        norm = reminder.normalize_time(args[1])
+        await message.answer(f"✅ Час {norm} додано." if added else f"⏰ {norm} вже в списку.")
+    elif sub in ("remove", "del") and len(args) >= 2:
+        removed = reminder.remove_time(reminder.normalize_time(args[1]) if reminder.is_valid_time(args[1]) else args[1])
+        await message.answer("🗑️ Час видалено." if removed else "📭 Такого часу немає в списку.")
     else:
         await message.answer(
-            "❌ <b>Формат:</b> <code>/remind on</code> або <code>/remind off</code>"
+            "❌ <b>Формат:</b> <code>/remind on</code>, <code>/remind off</code>,\n"
+            "<code>/remind add 09:00</code>, <code>/remind remove 09:00</code>"
         )
 
 @router.callback_query(F.data == "remind_on")
@@ -844,7 +895,7 @@ async def cb_remind_on(callback: CallbackQuery):
         return
     reminder.set_enabled(True)
     await callback.answer("Увімкнено")
-    await callback.message.edit_text("🔔 Нагадування увімкнено (щодня о 21:00).")
+    await callback.message.edit_text(_remind_status_text(), reply_markup=_remind_menu_keyboard())
 
 @router.callback_query(F.data == "remind_off")
 async def cb_remind_off(callback: CallbackQuery):
@@ -853,7 +904,43 @@ async def cb_remind_off(callback: CallbackQuery):
         return
     reminder.set_enabled(False)
     await callback.answer("Вимкнено")
-    await callback.message.edit_text("🔕 Нагадування вимкнено.")
+    await callback.message.edit_text(_remind_status_text(), reply_markup=_remind_menu_keyboard())
+
+@router.callback_query(F.data == "remind_add_time")
+async def cb_remind_add_time(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    awaiting_remind_time[callback.from_user.id] = True
+    await callback.answer()
+    await callback.message.edit_text("✏️ Напиши час у форматі <code>ГГ:ХХ</code>, наприклад <code>09:00</code>:")
+
+@router.callback_query(F.data == "remind_remove_time")
+async def cb_remind_remove_time(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    await callback.answer()
+
+    times = reminder.get_times()
+    buttons = [
+        [InlineKeyboardButton(text=t, callback_data=f"remind_del_time:{t}")]
+        for t in times
+    ]
+    await callback.message.edit_text(
+        "🗑 <b>Який час видалити?</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+@router.callback_query(F.data.startswith("remind_del_time:"))
+async def cb_remind_delete_time(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    time_str = callback.data.split(":", 1)[1]
+    reminder.remove_time(time_str)
+    await callback.answer("Видалено")
+    await callback.message.edit_text(_remind_status_text(), reply_markup=_remind_menu_keyboard())
 
 @router.callback_query(F.data.startswith("entry_confirm:"))
 async def cb_entry_confirm(callback: CallbackQuery):
@@ -1262,6 +1349,20 @@ async def handle_financial_entry(message: Message):
             return
         args = list(PERIOD_ARGS_MAP.get(period_choice, [])) + [f"top{n}"]
         await _generate_report(user_id, args, message.answer, message.answer_photo)
+        return
+
+    if user_id in awaiting_remind_time:
+        awaiting_remind_time.pop(user_id)
+        text = message.text.strip()
+        if not reminder.is_valid_time(text):
+            await message.answer("❌ <b>Невірний формат.</b> Напиши час як <code>ГГ:ХХ</code>, наприклад <code>09:00</code>.")
+            return
+        added = reminder.add_time(text)
+        norm = reminder.normalize_time(text)
+        if added:
+            await message.answer(f"✅ Час {norm} додано.", reply_markup=_remind_menu_keyboard())
+        else:
+            await message.answer(f"⏰ {norm} вже в списку.", reply_markup=_remind_menu_keyboard())
         return
 
     if user_id in awaiting_budget_category:

@@ -2,3 +2,4 @@ venv/
 .env
 credentials.json
 __pycache__/
+reminder_settings.json

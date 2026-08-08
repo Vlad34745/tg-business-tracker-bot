@@ -10,8 +10,8 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - 💼 **`/budget` Command:** Set monthly spending limits per category. Plain `/budget` shows a button menu (view/add/remove) — pick a category from your most-used ones or type your own, then just type the amount. Text shortcuts still work: `/budget set Кафе 1000`, `/budget remove Кафе`. Get an over-budget warning inside `/report`.
 - 📈 **Report Chart:** Every `/report` sends a horizontal bar chart image of the top spending categories alongside the text summary.
 - 📄 **`/export` Command:** Downloads every transaction as a CSV file (UTF-8 with BOM, opens correctly in Excel with Cyrillic text).
-- 🔍 **`/find` Command:** Search transactions by category or description (`/find кафе`), with a running total of matches.
-- 🔔 **`/remind` Command:** Optional daily reminder (21:00) to log expenses. Plain `/remind` shows on/off buttons; `/remind on` / `/remind off` also work directly.
+- 🔍 **`/find` Command:** Search transactions by category or description. Plain `/find` offers your most-used categories as buttons; `/find кафе` searches directly. Shows a running total of matches.
+- 🔔 **`/remind` Command:** Configurable reminders to log expenses — supports multiple times per day (not just one), all managed via buttons (enable/disable, add/remove a time) or text (`/remind on`, `/remind add 09:00`, `/remind remove 09:00`). Settings persist across bot restarts.
 - ✨ **Multi-Entry Input:** Paste several transactions at once (one per line) and confirm/save them all together.
 - ⚡ **Quick-Action Menu:** `/start` shows one-tap inline buttons (📋 Останній, 🗑 Undo, 📊 Звіт, 💼 Бюджет, 📄 Експорт) — kept to that one message so it doesn't clutter every reply, with no permanently-visible bottom keyboard.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
@@ -36,7 +36,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
 
 ## 🧪 Running Tests
-Unit tests cover the message-parsing logic in `core/validator.py`, monthly report aggregation in `core/report.py`, budget comparison in `core/budget.py`, chart generation in `core/chart.py`, CSV export in `core/export.py`, and search filtering in `core/search.py`:
+Unit tests cover the message-parsing logic in `core/validator.py`, monthly report aggregation in `core/report.py`, budget comparison in `core/budget.py`, chart generation in `core/chart.py`, CSV export in `core/export.py`, search filtering in `core/search.py`, and reminder scheduling logic in `core/reminder.py`:
 ```
 pip install pytest
 pytest tests/ -v
