@@ -10,10 +10,11 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 - 💼 **`/budget` Command:** Set monthly spending limits per category. Plain `/budget` shows a button menu (view/add/remove) — pick a category from your most-used ones or type your own, then just type the amount. Text shortcuts still work: `/budget set Кафе 1000`, `/budget remove Кафе`. Get an over-budget warning inside `/report`.
 - 📈 **Report Chart:** Every `/report` sends a horizontal bar chart image of the top spending categories alongside the text summary.
 - 📄 **`/export` Command:** Downloads every transaction as a CSV file (UTF-8 with BOM, opens correctly in Excel with Cyrillic text).
-- 🔍 **`/find` Command:** Search transactions by category or description. Plain `/find` offers your most-used categories as buttons; `/find кафе` searches directly. Shows a running total of matches.
+- 🔍 **`/find` Command:** Search transactions by category or description. Plain `/find` offers your most-used categories as buttons plus "✏️ Ввести текст" for a free-text query; `/find кафе` searches directly. Shows a running total of matches.
 - 🔔 **`/remind` Command:** Configurable reminders to log expenses — supports multiple times per day (not just one), all managed via buttons (enable/disable, add/remove a time) or text (`/remind on`, `/remind add 09:00`, `/remind remove 09:00`). Settings persist across bot restarts.
 - ✨ **Multi-Entry Input:** Paste several transactions at once (one per line) and confirm/save them all together.
 - ⚡ **Quick-Action Menu:** `/start` shows one-tap inline buttons (📋 Останній, 🗑 Undo, 📊 Звіт, 💼 Бюджет, 📄 Експорт) — kept to that one message so it doesn't clutter every reply, with no permanently-visible bottom keyboard.
+- 🌐 **`/language` Command:** Switch between Ukrainian and English (persists per user across restarts). Core flows — welcome message, quick menu, and the button-based pickers for `/report`, `/budget`, `/remind`, `/find`, and transaction confirmations — are fully bilingual.
 - 🔒 **Multi-User Access Control:** Secure access locked to specific Telegram User IDs via environment variables.
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords.
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
@@ -36,7 +37,7 @@ A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
 
 ## 🧪 Running Tests
-Unit tests cover the message-parsing logic in `core/validator.py`, monthly report aggregation in `core/report.py`, budget comparison in `core/budget.py`, chart generation in `core/chart.py`, CSV export in `core/export.py`, search filtering in `core/search.py`, and reminder scheduling logic in `core/reminder.py`:
+Unit tests cover the message-parsing logic in `core/validator.py`, monthly report aggregation in `core/report.py`, budget comparison in `core/budget.py`, chart generation in `core/chart.py`, CSV export in `core/export.py`, search filtering in `core/search.py`, reminder scheduling logic in `core/reminder.py`, translation lookup in `core/i18n.py`, and per-user language persistence in `core/language.py`:
 ```
 pip install pytest
 pytest tests/ -v

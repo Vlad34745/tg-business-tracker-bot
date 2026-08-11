@@ -10,7 +10,7 @@ from aiogram.types import (
     BufferedInputFile
 )
 from aiogram.filters import CommandStart, Command
-from core.validator import parse_financial_message, parse_multiline_message
+from core.validator import parse_financial_message, parse_multiline_message, dedupe_description
 from core.report import (
     compute_monthly_report, format_month_label, get_frequent_categories,
     compute_period_report, format_period_label, subtract_months
@@ -20,6 +20,8 @@ from core.chart import generate_category_chart
 from core.export import build_csv
 from core.search import filter_transactions
 from core import reminder
+from core import language
+from core.i18n import t
 from core.sheets import (
     append_transaction, get_last_transaction,
     delete_last_transaction, get_all_transactions,
@@ -109,6 +111,10 @@ awaiting_budget_category: dict = {}
 # free-text message is parsed as a HH:MM reminder time, not a transaction.
 awaiting_remind_time: dict = {}
 
+# Tracks users who tapped "✏️ Ввести текст" under /find: their next
+# free-text message is the search query, not a transaction.
+awaiting_find_query: dict = {}
+
 # Tracks recently *saved* transactions per user, to warn about likely
 # accidental duplicates (e.g. a double-tap or a flaky connection
 # resending the same message). Not a hard block — just a warning banner
@@ -117,7 +123,7 @@ DUPLICATE_WINDOW_SECONDS = 120
 recent_entries: dict = {}
 
 
-def _quick_menu_keyboard() -> InlineKeyboardMarkup:
+def _quick_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
     """
     A compact inline keyboard for the no-argument commands, attached to
     key responses so the person can tap through the bot without typing
@@ -127,15 +133,15 @@ def _quick_menu_keyboard() -> InlineKeyboardMarkup:
     """
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📋 Останній", callback_data="nav:last"),
-            InlineKeyboardButton(text="🗑 Undo", callback_data="nav:undo"),
+            InlineKeyboardButton(text=t("btn_last", lang), callback_data="nav:last"),
+            InlineKeyboardButton(text=t("btn_undo", lang), callback_data="nav:undo"),
         ],
         [
-            InlineKeyboardButton(text="📊 Звіт", callback_data="nav:report"),
-            InlineKeyboardButton(text="💼 Бюджет", callback_data="nav:budget"),
+            InlineKeyboardButton(text=t("btn_report", lang), callback_data="nav:report"),
+            InlineKeyboardButton(text=t("btn_budget", lang), callback_data="nav:budget"),
         ],
         [
-            InlineKeyboardButton(text="📄 Експорт", callback_data="nav:export"),
+            InlineKeyboardButton(text=t("btn_export", lang), callback_data="nav:export"),
         ],
     ])
 
@@ -156,30 +162,28 @@ def _is_likely_duplicate(user_id: int, type_tr: str, category: str, amount: floa
     )
 
 
-def _build_preview_text(entry: dict) -> str:
+def _build_preview_text(entry: dict, lang: str = "uk") -> str:
     icon = "💰" if entry["type_tr"] == "Income" else "📉"
-    warning = (
-        "⚠️ <b>Схожий запис уже додано нещодавно!</b> Перевір, чи це не дубль.\n\n"
-        if entry.get("is_duplicate") else ""
-    )
+    type_label = t("type_income", lang) if entry["type_tr"] == "Income" else t("type_expense", lang)
+    warning = (t("duplicate_warning", lang) + "\n\n") if entry.get("is_duplicate") else ""
     return (
-        f"{warning}👀 <b>Перевір перед збереженням:</b>\n\n"
-        f"📅 <b>Дата:</b> {entry['date']}\n"
-        f"{icon} <b>Тип:</b> {entry['type_tr']}\n"
-        f"🏷️ <b>Категорія:</b> {entry['category']}\n"
-        f"💵 <b>Сума:</b> {entry['amount']} грн\n"
-        f"📝 <b>Опис:</b> {entry['description']}"
+        f"{warning}{t('preview_check_title', lang)}\n\n"
+        f"{t('label_date', lang)} {entry['date']}\n"
+        f"{icon} {t('label_type', lang)} {type_label}\n"
+        f"{t('label_category', lang)} {entry['category']}\n"
+        f"{t('label_amount', lang)} {entry['amount']} грн\n"
+        f"{t('label_description', lang)} {entry['description']}"
     )
 
 
-def _build_preview_keyboard(entry_id: str) -> InlineKeyboardMarkup:
+def _build_preview_keyboard(entry_id: str, lang: str = "uk") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Зберегти", callback_data=f"entry_confirm:{entry_id}"),
-            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"entry_cancel:{entry_id}"),
+            InlineKeyboardButton(text=t("btn_save", lang), callback_data=f"entry_confirm:{entry_id}"),
+            InlineKeyboardButton(text=t("btn_cancel", lang), callback_data=f"entry_cancel:{entry_id}"),
         ],
         [
-            InlineKeyboardButton(text="✏️ Змінити категорію", callback_data=f"entry_edit_cat:{entry_id}"),
+            InlineKeyboardButton(text=t("btn_edit_category", lang), callback_data=f"entry_edit_cat:{entry_id}"),
         ],
     ])
 
@@ -188,34 +192,85 @@ async def cmd_start(message: Message):
     if not is_owner(message.from_user.id):
         await message.answer("🔒 Доступ обмежено. Цей бот є приватним фінансовим трекером.")
         return
-        
-    welcome_text = (
-        "<b>Привіт! Я твій особистий Фінансовий Трекер 📊</b>\n\n"
-        "Я вмію миттєво записувати твої доходи та витрати у Google Таблицю.\n\n"
-        "✏️ <b>Як відправляти записи:</b>\n"
-        "• <code>150 Обіди</code>\n"
-        "• <code>25000 Зарплата червень</code>\n"
-        "• <code>Таксі 220 центр</code>\n\n"
-        "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n"
-        "Якщо схожий запис уже був нещодавно — попереджу окремо.\n\n"
-        "🔎 <code>/last</code> — останній запис.\n"
-        "🗑️ <code>/undo</code> — видалити останній запис (або весь пакет, якщо зберігав кілька разом).\n"
-        "📊 <code>/report</code> — звіт: оберу період і кількість категорій кнопками.\n"
-        "💼 <code>/budget</code> — ліміти по категоріях: перегляд/додавання/видалення кнопками.\n"
-        "📄 <code>/export</code> — усі записи у CSV.\n"
-        "🔍 <code>/find</code> — пошук: обери категорію кнопкою або напиши <code>/find текст</code>.\n"
-        "🔔 <code>/remind</code> — нагадування кнопками: увімкнути/вимкнути, додати чи прибрати час.\n\n"
-        "✨ Можна надіслати кілька транзакцій одним повідомленням —\n"
-        "   кожну з нового рядка, і я запропоную зберегти всі одразу.\n\n"
-        "Спробуй відправити мені будь-яку транзакцію!"
-    )
+
+    lang = language.get_language(message.from_user.id)
+
+    if lang == "en":
+        welcome_text = (
+            "<b>Hi! I'm your personal Finance Tracker 📊</b>\n\n"
+            "I can instantly log your income and expenses into a Google Sheet.\n\n"
+            "✏️ <b>How to send entries:</b>\n"
+            "• <code>150 Lunch</code>\n"
+            "• <code>25000 Salary June</code>\n"
+            "• <code>Taxi 220 downtown</code>\n\n"
+            "Before saving, I'll show a preview with ✅/❌ buttons.\n"
+            "If a similar entry was just saved, I'll flag it separately.\n\n"
+            "🔎 <code>/last</code> — most recent entry.\n"
+            "🗑️ <code>/undo</code> — delete the last entry (or the whole batch, if you saved several together).\n"
+            "📊 <code>/report</code> — report: pick period and category count with buttons.\n"
+            "💼 <code>/budget</code> — category limits: view/add/remove with buttons.\n"
+            "📄 <code>/export</code> — all entries as CSV.\n"
+            "🔍 <code>/find</code> — search: pick a category or enter your own text.\n"
+            "🔔 <code>/remind</code> — reminders with buttons: on/off, add or remove a time.\n"
+            "🌐 <code>/language</code> — switch language.\n\n"
+            "✨ You can send several transactions in one message — one\n"
+            "   per line — and I'll offer to save them all together.\n\n"
+            "Try sending me any transaction!"
+        )
+    else:
+        welcome_text = (
+            "<b>Привіт! Я твій особистий Фінансовий Трекер 📊</b>\n\n"
+            "Я вмію миттєво записувати твої доходи та витрати у Google Таблицю.\n\n"
+            "✏️ <b>Як відправляти записи:</b>\n"
+            "• <code>150 Обіди</code>\n"
+            "• <code>25000 Зарплата червень</code>\n"
+            "• <code>Таксі 220 центр</code>\n\n"
+            "Перед збереженням я покажу перевірку з кнопками ✅/❌.\n"
+            "Якщо схожий запис уже був нещодавно — попереджу окремо.\n\n"
+            "🔎 <code>/last</code> — останній запис.\n"
+            "🗑️ <code>/undo</code> — видалити останній запис (або весь пакет, якщо зберігав кілька разом).\n"
+            "📊 <code>/report</code> — звіт: оберу період і кількість категорій кнопками.\n"
+            "💼 <code>/budget</code> — ліміти по категоріях: перегляд/додавання/видалення кнопками.\n"
+            "📄 <code>/export</code> — усі записи у CSV.\n"
+            "🔍 <code>/find</code> — пошук: обери категорію чи «Ввести текст» кнопкою.\n"
+            "🔔 <code>/remind</code> — нагадування кнопками: увімкнути/вимкнути, додати чи прибрати час.\n"
+            "🌐 <code>/language</code> — зміна мови.\n\n"
+            "✨ Можна надіслати кілька транзакцій одним повідомленням —\n"
+            "   кожну з нового рядка, і я запропоную зберегти всі одразу.\n\n"
+            "Спробуй відправити мені будь-яку транзакцію!"
+        )
     await message.answer("👋", reply_markup=ReplyKeyboardRemove())
-    await message.answer(welcome_text, reply_markup=_quick_menu_keyboard())
+    await message.answer(welcome_text, reply_markup=_quick_menu_keyboard(lang))
+
+@router.message(Command("language"))
+async def cmd_language(message: Message):
+    if not is_owner(message.from_user.id):
+        await message.answer(t("access_denied", language.get_language(message.from_user.id)))
+        return
+
+    lang = language.get_language(message.from_user.id)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🇺🇦 Українська", callback_data="lang_set:uk"),
+        InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_set:en"),
+    ]])
+    await message.answer(t("language_prompt", lang), reply_markup=keyboard)
+
+@router.callback_query(F.data.startswith("lang_set:"))
+async def cb_set_language(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer(t("access_denied", language.get_language(callback.from_user.id)), show_alert=True)
+        return
+
+    new_lang = callback.data.split(":", 1)[1]
+    language.set_language(callback.from_user.id, new_lang)
+    await callback.answer()
+    await callback.message.edit_text(t("language_set", new_lang))
 
 @router.message(Command("last"))
 async def cmd_last(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     try:
@@ -231,14 +286,15 @@ async def cmd_last(message: Message):
     # Pad the row in case some trailing columns are empty
     date, type_tr, category, amount, description = _format_transaction(row)
     icon = "💰" if type_tr == "Income" else "📉"
+    type_label = t("type_income", lang) if type_tr == "Income" else t("type_expense", lang)
 
     await message.answer(
-        f"<b>Останній запис:</b>\n\n"
-        f"📅 <b>Дата:</b> {date}\n"
-        f"{icon} <b>Тип:</b> {type_tr}\n"
-        f"🏷️ <b>Категорія:</b> {category}\n"
-        f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}"
+        f"{t('last_entry_title', lang)}\n\n"
+        f"{t('label_date', lang)} {date}\n"
+        f"{icon} {t('label_type', lang)} {type_label}\n"
+        f"{t('label_category', lang)} {category}\n"
+        f"{t('label_amount', lang)} {amount} грн\n"
+        f"{t('label_description', lang)} {description}"
     )
 
 @router.message(Command("undo"))
@@ -248,6 +304,7 @@ async def cmd_undo(message: Message):
         return
 
     user_id = message.from_user.id
+    lang = language.get_language(user_id)
     last_count = _last_action_count.get(user_id, 1)
 
     if last_count > 1:
@@ -276,8 +333,8 @@ async def cmd_undo(message: Message):
         preview_lines.append(f"\n💵 <b>Разом:</b> {total:.2f} грн")
 
         confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"✅ Так, видалити {len(rows)}", callback_data=f"undo_batch_confirm:{len(rows)}"),
-            InlineKeyboardButton(text="❌ Скасувати", callback_data="undo_cancel"),
+            InlineKeyboardButton(text=t("btn_confirm_delete_n", lang, n=len(rows)), callback_data=f"undo_batch_confirm:{len(rows)}"),
+            InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="undo_cancel"),
         ]])
 
         await message.answer("\n".join(preview_lines), reply_markup=confirm_keyboard)
@@ -295,19 +352,20 @@ async def cmd_undo(message: Message):
 
     date, type_tr, category, amount, description = _format_transaction(row)
     icon = "💰" if type_tr == "Income" else "📉"
+    type_label = t("type_income", lang) if type_tr == "Income" else t("type_expense", lang)
 
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Так, видалити", callback_data="undo_confirm"),
-        InlineKeyboardButton(text="❌ Скасувати", callback_data="undo_cancel"),
+        InlineKeyboardButton(text=t("btn_confirm_delete", lang), callback_data="undo_confirm"),
+        InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="undo_cancel"),
     ]])
 
     await message.answer(
-        f"⚠️ <b>Видалити цей запис?</b>\n\n"
-        f"📅 <b>Дата:</b> {date}\n"
-        f"{icon} <b>Тип:</b> {type_tr}\n"
-        f"🏷️ <b>Категорія:</b> {category}\n"
-        f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}",
+        f"{t('confirm_delete_this', lang)}\n\n"
+        f"{t('label_date', lang)} {date}\n"
+        f"{icon} {t('label_type', lang)} {type_label}\n"
+        f"{t('label_category', lang)} {category}\n"
+        f"{t('label_amount', lang)} {amount} грн\n"
+        f"{t('label_description', lang)} {description}",
         reply_markup=confirm_keyboard
     )
 
@@ -518,15 +576,16 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
 
 @router.message(Command("report"))
 async def cmd_report(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     raw_args = message.text.split()[1:]
     if not raw_args:
         # Plain "/report" with no arguments — ask which period instead of
         # silently defaulting to the current month.
-        await message.answer("📊 <b>За який період?</b>", reply_markup=_report_period_keyboard())
+        await message.answer(t("report_period_prompt", lang), reply_markup=_report_period_keyboard(lang))
         return
 
     await _generate_report(message.from_user.id, raw_args, message.answer, message.answer_photo)
@@ -564,11 +623,11 @@ async def _show_budget_view(user_id: int, answer):
 
     await answer("\n".join(lines))
 
-def _budget_menu_keyboard() -> InlineKeyboardMarkup:
+def _budget_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Переглянути", callback_data="budget_view")],
-        [InlineKeyboardButton(text="➕ Встановити ліміт", callback_data="budget_add")],
-        [InlineKeyboardButton(text="🗑 Видалити ліміт", callback_data="budget_remove")],
+        [InlineKeyboardButton(text=t("btn_view", lang), callback_data="budget_view")],
+        [InlineKeyboardButton(text=t("btn_add_limit", lang), callback_data="budget_add")],
+        [InlineKeyboardButton(text=t("btn_remove_limit", lang), callback_data="budget_remove")],
     ])
 
 @router.message(Command("budget"))
@@ -639,7 +698,8 @@ async def cmd_budget(message: Message):
         return
 
     # No args: show a button menu instead of jumping straight to the view
-    await message.answer("💼 <b>Бюджет — що робимо?</b>", reply_markup=_budget_menu_keyboard())
+    lang = language.get_language(message.from_user.id)
+    await message.answer(t("budget_menu_prompt", lang), reply_markup=_budget_menu_keyboard(lang))
 
 @router.callback_query(F.data == "budget_view")
 async def cb_budget_view(callback: CallbackQuery):
@@ -652,8 +712,9 @@ async def cb_budget_view(callback: CallbackQuery):
 
 @router.callback_query(F.data == "budget_add")
 async def cb_budget_add(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
 
@@ -667,7 +728,7 @@ async def cb_budget_add(callback: CallbackQuery):
         [InlineKeyboardButton(text=cat, callback_data=f"budget_set_cat:{cat}")]
         for cat in top_categories
     ]
-    buttons.append([InlineKeyboardButton(text="✏️ Своя категорія", callback_data="budget_set_cat_custom")])
+    buttons.append([InlineKeyboardButton(text=t("btn_custom_category", lang), callback_data="budget_set_cat_custom")])
     await callback.message.edit_text(
         "🏷️ <b>Для якої категорії встановити ліміт?</b>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -710,7 +771,7 @@ async def cb_budget_remove(callback: CallbackQuery):
         return
 
     buttons = [
-        [InlineKeyboardButton(text=f"{cat} ({limit:.0f} грн)", callback_data=f"budget_del_cat:{cat}")]
+        [InlineKeyboardButton(text=f"{cat} ({budgets[cat]:.0f} грн)", callback_data=f"budget_del_cat:{cat}")]
         for cat in sorted(budgets.keys())
     ]
     await callback.message.edit_text(
@@ -799,8 +860,9 @@ async def _run_find(user_id: int, query: str, answer):
 
 @router.message(Command("find"))
 async def cmd_find(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     parts = message.text.split(maxsplit=1)
@@ -821,9 +883,9 @@ async def cmd_find(message: Message):
             [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{cat}")]
             for cat in top_categories
         ]
+        buttons.append([InlineKeyboardButton(text=t("btn_enter_text", lang), callback_data="find_custom")])
         await message.answer(
-            "🔍 <b>Що шукаємо?</b> Обери категорію або напиши свій запит командою "
-            "<code>/find текст</code>:",
+            t("find_prompt", lang),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
         )
         return
@@ -840,48 +902,66 @@ async def cb_find_category(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
     await _run_find(callback.from_user.id, query, callback.message.answer)
 
-def _remind_status_text() -> str:
-    status = "🔔 увімкнені" if reminder.is_enabled() else "🔕 вимкнені"
-    times = ", ".join(reminder.get_times())
-    return f"Нагадування зараз {status}.\n⏰ <b>Час(и):</b> {times}"
+@router.callback_query(F.data == "find_custom")
+async def cb_find_custom(callback: CallbackQuery):
+    if not is_owner(callback.from_user.id):
+        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        return
+    awaiting_find_query[callback.from_user.id] = True
+    await callback.answer()
+    await callback.message.edit_text("✏️ Напиши, що шукаємо:")
 
-def _remind_menu_keyboard() -> InlineKeyboardMarkup:
+def _remind_status_text(lang: str = "uk") -> str:
+    status = t("remind_status_on", lang) if reminder.is_enabled() else t("remind_status_off", lang)
+    times = ", ".join(reminder.get_times())
+    return t("remind_status_line", lang, status=status, times=times)
+
+def _remind_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🔔 Увімкнути", callback_data="remind_on"),
-            InlineKeyboardButton(text="🔕 Вимкнути", callback_data="remind_off"),
+            InlineKeyboardButton(text=t("btn_remind_on", lang), callback_data="remind_on"),
+            InlineKeyboardButton(text=t("btn_remind_off", lang), callback_data="remind_off"),
         ],
         [
-            InlineKeyboardButton(text="➕ Додати час", callback_data="remind_add_time"),
-            InlineKeyboardButton(text="🗑 Видалити час", callback_data="remind_remove_time"),
+            InlineKeyboardButton(text=t("btn_add_time", lang), callback_data="remind_add_time"),
+            InlineKeyboardButton(text=t("btn_remove_time", lang), callback_data="remind_remove_time"),
         ],
     ])
 
 @router.message(Command("remind"))
 async def cmd_remind(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     args = message.text.split()[1:]
     if not args:
-        await message.answer(_remind_status_text(), reply_markup=_remind_menu_keyboard())
+        await message.answer(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
         return
 
     sub = args[0].lower()
     if sub in ("on", "увімкнути"):
         reminder.set_enabled(True)
-        await message.answer("🔔 Нагадування увімкнено.")
+        await message.answer("🔔 Нагадування увімкнено." if lang == "uk" else "🔔 Reminders turned on.")
     elif sub in ("off", "вимкнути"):
         reminder.set_enabled(False)
-        await message.answer("🔕 Нагадування вимкнено.")
+        await message.answer("🔕 Нагадування вимкнено." if lang == "uk" else "🔕 Reminders turned off.")
     elif sub in ("add",) and len(args) >= 2 and reminder.is_valid_time(args[1]):
         added = reminder.add_time(args[1])
         norm = reminder.normalize_time(args[1])
-        await message.answer(f"✅ Час {norm} додано." if added else f"⏰ {norm} вже в списку.")
+        if lang == "uk":
+            msg = f"✅ Час {norm} додано." if added else f"⏰ {norm} вже в списку."
+        else:
+            msg = f"✅ Time {norm} added." if added else f"⏰ {norm} is already in the list."
+        await message.answer(msg)
     elif sub in ("remove", "del") and len(args) >= 2:
         removed = reminder.remove_time(reminder.normalize_time(args[1]) if reminder.is_valid_time(args[1]) else args[1])
-        await message.answer("🗑️ Час видалено." if removed else "📭 Такого часу немає в списку.")
+        if lang == "uk":
+            msg = "🗑️ Час видалено." if removed else "📭 Такого часу немає в списку."
+        else:
+            msg = "🗑️ Time removed." if removed else "📭 That time isn't in the list."
+        await message.answer(msg)
     else:
         await message.answer(
             "❌ <b>Формат:</b> <code>/remind on</code>, <code>/remind off</code>,\n"
@@ -890,62 +970,68 @@ async def cmd_remind(message: Message):
 
 @router.callback_query(F.data == "remind_on")
 async def cb_remind_on(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     reminder.set_enabled(True)
-    await callback.answer("Увімкнено")
-    await callback.message.edit_text(_remind_status_text(), reply_markup=_remind_menu_keyboard())
+    await callback.answer("Увімкнено" if lang == "uk" else "Turned on")
+    await callback.message.edit_text(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
 
 @router.callback_query(F.data == "remind_off")
 async def cb_remind_off(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     reminder.set_enabled(False)
-    await callback.answer("Вимкнено")
-    await callback.message.edit_text(_remind_status_text(), reply_markup=_remind_menu_keyboard())
+    await callback.answer("Вимкнено" if lang == "uk" else "Turned off")
+    await callback.message.edit_text(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
 
 @router.callback_query(F.data == "remind_add_time")
 async def cb_remind_add_time(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     awaiting_remind_time[callback.from_user.id] = True
     await callback.answer()
-    await callback.message.edit_text("✏️ Напиши час у форматі <code>ГГ:ХХ</code>, наприклад <code>09:00</code>:")
+    prompt = ("✏️ Напиши час у форматі <code>ГГ:ХХ</code>, наприклад <code>09:00</code>:" if lang == "uk"
+              else "✏️ Write a time as <code>HH:MM</code>, e.g. <code>09:00</code>:")
+    await callback.message.edit_text(prompt)
 
 @router.callback_query(F.data == "remind_remove_time")
 async def cb_remind_remove_time(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
 
     times = reminder.get_times()
     buttons = [
-        [InlineKeyboardButton(text=t, callback_data=f"remind_del_time:{t}")]
-        for t in times
+        [InlineKeyboardButton(text=time_str, callback_data=f"remind_del_time:{time_str}")]
+        for time_str in times
     ]
-    await callback.message.edit_text(
-        "🗑 <b>Який час видалити?</b>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
-    )
+    prompt = "🗑 <b>Який час видалити?</b>" if lang == "uk" else "🗑 <b>Which time to remove?</b>"
+    await callback.message.edit_text(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("remind_del_time:"))
 async def cb_remind_delete_time(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     time_str = callback.data.split(":", 1)[1]
     reminder.remove_time(time_str)
-    await callback.answer("Видалено")
-    await callback.message.edit_text(_remind_status_text(), reply_markup=_remind_menu_keyboard())
+    await callback.answer("Видалено" if lang == "uk" else "Removed")
+    await callback.message.edit_text(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
 
 @router.callback_query(F.data.startswith("entry_confirm:"))
 async def cb_entry_confirm(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     entry_id = callback.data.split(":", 1)[1]
@@ -962,15 +1048,16 @@ async def cb_entry_confirm(callback: CallbackQuery):
         _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
         _last_action_count[callback.from_user.id] = 1
         icon = "💰" if entry["type_tr"] == "Income" else "📉"
+        type_label = t("type_income", lang) if entry["type_tr"] == "Income" else t("type_expense", lang)
         await callback.message.edit_text(
-            f"✅ <b>Запис успішно додано!</b>\n\n"
-            f"📅 <b>Дата:</b> {entry['date']}\n"
-            f"{icon} <b>Тип:</b> {entry['type_tr']}\n"
-            f"🏷️ <b>Категорія:</b> {entry['category']}\n"
-            f"💵 <b>Сума:</b> {entry['amount']} грн\n"
-            f"📝 <b>Опис:</b> {entry['description']}"
+            f"{t('entry_saved_title', lang)}\n\n"
+            f"{t('label_date', lang)} {entry['date']}\n"
+            f"{icon} {t('label_type', lang)} {type_label}\n"
+            f"{t('label_category', lang)} {entry['category']}\n"
+            f"{t('label_amount', lang)} {entry['amount']} грн\n"
+            f"{t('label_description', lang)} {entry['description']}"
         )
-        await callback.answer("Збережено")
+        await callback.answer(t("toast_saved", lang))
     except Exception as e:
         await callback.message.edit_text(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
         await callback.answer()
@@ -1020,8 +1107,9 @@ async def cb_entry_edit_category(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("set_cat:"))
 async def cb_set_category(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     _, entry_id, new_category = callback.data.split(":", 2)
@@ -1033,8 +1121,8 @@ async def cb_set_category(callback: CallbackQuery):
 
     entry["category"] = new_category
     await callback.message.edit_text(
-        _build_preview_text(entry),
-        reply_markup=_build_preview_keyboard(entry_id)
+        _build_preview_text(entry, lang),
+        reply_markup=_build_preview_keyboard(entry_id, lang)
     )
     await callback.answer("Категорію оновлено")
 
@@ -1056,6 +1144,7 @@ async def cb_custom_category(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("back_to_preview:"))
 async def cb_back_to_preview(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     entry_id = callback.data.split(":", 1)[1]
     entry = pending_entries.get(entry_id)
     if not entry:
@@ -1064,8 +1153,8 @@ async def cb_back_to_preview(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        _build_preview_text(entry),
-        reply_markup=_build_preview_keyboard(entry_id)
+        _build_preview_text(entry, lang),
+        reply_markup=_build_preview_keyboard(entry_id, lang)
     )
     await callback.answer()
 
@@ -1115,8 +1204,9 @@ async def cb_batch_cancel(callback: CallbackQuery):
 
 @router.callback_query(F.data == "nav:last")
 async def cb_nav_last(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
 
@@ -1132,19 +1222,21 @@ async def cb_nav_last(callback: CallbackQuery):
 
     date, type_tr, category, amount, description = _format_transaction(row)
     icon = "💰" if type_tr == "Income" else "📉"
+    type_label = t("type_income", lang) if type_tr == "Income" else t("type_expense", lang)
     await callback.message.answer(
-        f"<b>Останній запис:</b>\n\n"
-        f"📅 <b>Дата:</b> {date}\n"
-        f"{icon} <b>Тип:</b> {type_tr}\n"
-        f"🏷️ <b>Категорія:</b> {category}\n"
-        f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}"
+        f"{t('last_entry_title', lang)}\n\n"
+        f"{t('label_date', lang)} {date}\n"
+        f"{icon} {t('label_type', lang)} {type_label}\n"
+        f"{t('label_category', lang)} {category}\n"
+        f"{t('label_amount', lang)} {amount} грн\n"
+        f"{t('label_description', lang)} {description}"
     )
 
 @router.callback_query(F.data == "nav:undo")
 async def cb_nav_undo(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
 
@@ -1174,8 +1266,8 @@ async def cb_nav_undo(callback: CallbackQuery):
         preview_lines.append(f"\n💵 <b>Разом:</b> {total:.2f} грн")
 
         confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"✅ Так, видалити {len(rows)}", callback_data=f"undo_batch_confirm:{len(rows)}"),
-            InlineKeyboardButton(text="❌ Скасувати", callback_data="undo_cancel"),
+            InlineKeyboardButton(text=t("btn_confirm_delete_n", lang, n=len(rows)), callback_data=f"undo_batch_confirm:{len(rows)}"),
+            InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="undo_cancel"),
         ]])
         await callback.message.answer("\n".join(preview_lines), reply_markup=confirm_keyboard)
         return
@@ -1191,48 +1283,51 @@ async def cb_nav_undo(callback: CallbackQuery):
 
     date, type_tr, category, amount, description = _format_transaction(row)
     icon = "💰" if type_tr == "Income" else "📉"
+    type_label = t("type_income", lang) if type_tr == "Income" else t("type_expense", lang)
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Так, видалити", callback_data="undo_confirm"),
-        InlineKeyboardButton(text="❌ Скасувати", callback_data="undo_cancel"),
+        InlineKeyboardButton(text=t("btn_confirm_delete", lang), callback_data="undo_confirm"),
+        InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="undo_cancel"),
     ]])
     await callback.message.answer(
-        f"⚠️ <b>Видалити цей запис?</b>\n\n"
-        f"📅 <b>Дата:</b> {date}\n"
-        f"{icon} <b>Тип:</b> {type_tr}\n"
-        f"🏷️ <b>Категорія:</b> {category}\n"
-        f"💵 <b>Сума:</b> {amount} грн\n"
-        f"📝 <b>Опис:</b> {description}",
+        f"{t('confirm_delete_this', lang)}\n\n"
+        f"{t('label_date', lang)} {date}\n"
+        f"{icon} {t('label_type', lang)} {type_label}\n"
+        f"{t('label_category', lang)} {category}\n"
+        f"{t('label_amount', lang)} {amount} грн\n"
+        f"{t('label_description', lang)} {description}",
         reply_markup=confirm_keyboard
     )
 
-def _report_period_keyboard() -> InlineKeyboardMarkup:
+def _report_period_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Сьогодні", callback_data="report_period:today"),
-            InlineKeyboardButton(text="Тиждень", callback_data="report_period:week"),
+            InlineKeyboardButton(text=t("btn_today", lang), callback_data="report_period:today"),
+            InlineKeyboardButton(text=t("btn_week", lang), callback_data="report_period:week"),
         ],
         [
-            InlineKeyboardButton(text="Місяць", callback_data="report_period:month"),
-            InlineKeyboardButton(text="2 місяці", callback_data="report_period:2month"),
+            InlineKeyboardButton(text=t("btn_month", lang), callback_data="report_period:month"),
+            InlineKeyboardButton(text=t("btn_2months", lang), callback_data="report_period:2month"),
         ],
         [
-            InlineKeyboardButton(text="Рік", callback_data="report_period:year"),
-            InlineKeyboardButton(text="✏️ Свій варіант", callback_data="report_period:custom"),
+            InlineKeyboardButton(text=t("btn_year", lang), callback_data="report_period:year"),
+            InlineKeyboardButton(text=t("btn_custom_option", lang), callback_data="report_period:custom"),
         ],
     ])
 
 @router.callback_query(F.data == "nav:report")
 async def cb_nav_report(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
-    await callback.message.answer("📊 <b>За який період?</b>", reply_markup=_report_period_keyboard())
+    await callback.message.answer(t("report_period_prompt", lang), reply_markup=_report_period_keyboard(lang))
 
 @router.callback_query(F.data.startswith("report_period:"))
 async def cb_report_period(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     choice = callback.data.split(":", 1)[1]
@@ -1250,18 +1345,18 @@ async def cb_report_period(callback: CallbackQuery):
     await callback.answer()
     top_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Топ-5", callback_data=f"report_gen:{choice}:top5"),
-            InlineKeyboardButton(text="Топ-10", callback_data=f"report_gen:{choice}:top10"),
+            InlineKeyboardButton(text=t("btn_top5", lang), callback_data=f"report_gen:{choice}:top5"),
+            InlineKeyboardButton(text=t("btn_top10", lang), callback_data=f"report_gen:{choice}:top10"),
         ],
         [
-            InlineKeyboardButton(text="Топ-15", callback_data=f"report_gen:{choice}:top15"),
-            InlineKeyboardButton(text="Повний список", callback_data=f"report_gen:{choice}:full"),
+            InlineKeyboardButton(text=t("btn_top15", lang), callback_data=f"report_gen:{choice}:top15"),
+            InlineKeyboardButton(text=t("btn_full_list", lang), callback_data=f"report_gen:{choice}:full"),
         ],
         [
-            InlineKeyboardButton(text="✏️ Своє число", callback_data=f"report_gen:{choice}:customtop"),
+            InlineKeyboardButton(text=t("btn_custom_number", lang), callback_data=f"report_gen:{choice}:customtop"),
         ],
     ])
-    await callback.message.edit_text("🏷️ <b>Скільки категорій показати?</b>", reply_markup=top_keyboard)
+    await callback.message.edit_text(t("report_topn_prompt", lang), reply_markup=top_keyboard)
 
 @router.callback_query(F.data.startswith("report_gen:"))
 async def cb_report_generate(callback: CallbackQuery):
@@ -1289,11 +1384,12 @@ async def cb_report_generate(callback: CallbackQuery):
 
 @router.callback_query(F.data == "nav:budget")
 async def cb_nav_budget(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
-    await callback.message.answer("💼 <b>Бюджет — що робимо?</b>", reply_markup=_budget_menu_keyboard())
+    await callback.message.answer(t("budget_menu_prompt", lang), reply_markup=_budget_menu_keyboard(lang))
 
 @router.callback_query(F.data == "nav:export")
 async def cb_nav_export(callback: CallbackQuery):
@@ -1353,16 +1449,29 @@ async def handle_financial_entry(message: Message):
 
     if user_id in awaiting_remind_time:
         awaiting_remind_time.pop(user_id)
+        lang = language.get_language(user_id)
         text = message.text.strip()
         if not reminder.is_valid_time(text):
-            await message.answer("❌ <b>Невірний формат.</b> Напиши час як <code>ГГ:ХХ</code>, наприклад <code>09:00</code>.")
+            err = ("❌ <b>Невірний формат.</b> Напиши час як <code>ГГ:ХХ</code>, наприклад <code>09:00</code>." if lang == "uk"
+                   else "❌ <b>Invalid format.</b> Write a time as <code>HH:MM</code>, e.g. <code>09:00</code>.")
+            await message.answer(err)
             return
         added = reminder.add_time(text)
         norm = reminder.normalize_time(text)
-        if added:
-            await message.answer(f"✅ Час {norm} додано.", reply_markup=_remind_menu_keyboard())
+        if lang == "uk":
+            msg = f"✅ Час {norm} додано." if added else f"⏰ {norm} вже в списку."
         else:
-            await message.answer(f"⏰ {norm} вже в списку.", reply_markup=_remind_menu_keyboard())
+            msg = f"✅ Time {norm} added." if added else f"⏰ {norm} is already in the list."
+        await message.answer(msg, reply_markup=_remind_menu_keyboard(lang))
+        return
+
+    if user_id in awaiting_find_query:
+        awaiting_find_query.pop(user_id)
+        query = message.text.strip()
+        if not query:
+            await message.answer("❌ Запит не може бути порожнім.")
+            return
+        await _run_find(user_id, query, message.answer)
         return
 
     if user_id in awaiting_budget_category:
@@ -1401,11 +1510,13 @@ async def handle_financial_entry(message: Message):
             return
 
         new_category = message.text.strip()
-        entry["category"] = new_category[0].upper() + new_category[1:] if new_category else entry["category"]
+        if new_category:
+            entry["description"] = dedupe_description(entry["description"], new_category)
+            entry["category"] = new_category[0].upper() + new_category[1:]
 
         await message.answer(
-            _build_preview_text(entry),
-            reply_markup=_build_preview_keyboard(entry_id)
+            _build_preview_text(entry, language.get_language(user_id)),
+            reply_markup=_build_preview_keyboard(entry_id, language.get_language(user_id))
         )
         return
 
@@ -1436,8 +1547,8 @@ async def handle_financial_entry(message: Message):
                 preview_lines.append(f"• {line}")
 
         batch_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"✅ Зберегти всі ({len(entries)})", callback_data=f"batch_confirm:{batch_id}"),
-            InlineKeyboardButton(text="❌ Скасувати", callback_data=f"batch_cancel:{batch_id}"),
+            InlineKeyboardButton(text=t("btn_save_all", language.get_language(user_id), n=len(entries)), callback_data=f"batch_confirm:{batch_id}"),
+            InlineKeyboardButton(text=t("btn_cancel", language.get_language(user_id)), callback_data=f"batch_cancel:{batch_id}"),
         ]])
 
         await message.answer("\n".join(preview_lines), reply_markup=batch_keyboard)
@@ -1458,6 +1569,6 @@ async def handle_financial_entry(message: Message):
     })
 
     await message.answer(
-        _build_preview_text(pending_entries[entry_id]),
-        reply_markup=_build_preview_keyboard(entry_id)
+        _build_preview_text(pending_entries[entry_id], language.get_language(user_id)),
+        reply_markup=_build_preview_keyboard(entry_id, language.get_language(user_id))
     )

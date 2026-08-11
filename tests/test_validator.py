@@ -1,6 +1,6 @@
 import pytest
 
-from core.validator import parse_financial_message, parse_multiline_message
+from core.validator import parse_financial_message, parse_multiline_message, dedupe_description
 
 
 def test_amount_before_category_and_description():
@@ -53,6 +53,26 @@ def test_income_keyword_detection():
 def test_income_keyword_upwork_case_insensitive():
     result = parse_financial_message("12000 UPWORK оплата")
     assert result[0] == "Income"
+
+
+def test_income_keyword_english_salary():
+    result = parse_financial_message("25000 Salary June")
+    assert result[0] == "Income"
+
+
+def test_income_keyword_english_freelance():
+    result = parse_financial_message("500 Freelance project")
+    assert result[0] == "Income"
+
+
+def test_income_keyword_ukrainian_synonyms():
+    for text in ["5000 Надходження", "3000 Виплата", "15000 Стипендія", "2000 Пенсія", "1000 Гонорар", "1000 Поповнення"]:
+        assert parse_financial_message(text)[0] == "Income", f"{text} should be Income"
+
+
+def test_income_keyword_english_synonyms():
+    for text in ["500 Earnings", "1000 Wage", "500 Stipend", "2000 Pension", "200 Refund", "1000 Grant", "300 Royalty"]:
+        assert parse_financial_message(text)[0] == "Income", f"{text} should be Income"
 
 
 def test_no_income_keyword_defaults_to_expense():
@@ -115,3 +135,31 @@ def test_parse_multiline_ignores_blank_lines():
 def test_parse_multiline_uses_given_date():
     entries, _ = parse_multiline_message("150 Обіди", "2026-01-01")
     assert entries[0]["date"] == "2026-01-01"
+
+
+def test_dedupe_description_removes_overlapping_prefix():
+    result = dedupe_description("з шинкою та сиром купив в гроші", "Млинці з шинкою та сиром")
+    assert result == "купив в гроші"
+
+
+def test_dedupe_description_no_overlap_unchanged():
+    result = dedupe_description("центр", "Таксі")
+    assert result == "центр"
+
+
+def test_dedupe_description_full_overlap_returns_dash():
+    result = dedupe_description("з шинкою", "Млинці з шинкою")
+    assert result == "-"
+
+
+def test_dedupe_description_handles_dash():
+    assert dedupe_description("-", "Кафе") == "-"
+
+
+def test_dedupe_description_handles_empty():
+    assert dedupe_description("", "Кафе") == ""
+
+
+def test_dedupe_description_case_insensitive():
+    result = dedupe_description("Шинкою та сиром купив", "млинці шинкою та сиром")
+    assert result == "купив"

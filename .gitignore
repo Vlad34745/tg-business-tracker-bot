@@ -3,3 +3,4 @@ venv/
 credentials.json
 __pycache__/
 reminder_settings.json
+language_settings.json

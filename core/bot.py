@@ -53,6 +53,7 @@ async def main():
         BotCommand(command="export", description="Експорт усіх записів у CSV"),
         BotCommand(command="find", description="Пошук: категорії кнопками або /find текст"),
         BotCommand(command="remind", description="Нагадування — час(и) і увімк/вимк кнопками"),
+        BotCommand(command="language", description="Мова бота / Bot language"),
     ])
 
     # Background task: sends a daily reminder to log expenses if enabled

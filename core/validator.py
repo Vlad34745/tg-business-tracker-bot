@@ -5,7 +5,14 @@ from typing import Optional, Tuple
 INCOME_KEYWORDS = {
     "дохід", "доход", "зарплата", "зп", "аванс", "інвестиції", "інвестиція", 
     "фріланс", "фоп", "fop", "кешбек", "інжур", "inzhur", "upwork", "binance", 
-    "депозит", "бонус", "премія"
+    "депозит", "бонус", "премія",
+    "надходження", "виплата", "виплати", "прибуток", "заробіток",
+    "стипендія", "пенсія", "гонорар", "поповнення",
+    # English equivalents, for people using the bot in English
+    "income", "salary", "advance", "investment", "investments",
+    "freelance", "cashback", "deposit", "bonus", "prize", "payout",
+    "earnings", "wage", "wages", "stipend", "pension", "refund",
+    "grant", "royalty", "royalties",
 }
 
 
@@ -106,3 +113,26 @@ def parse_multiline_message(text: str, current_date: str) -> Tuple[list, list]:
             failed_lines.append(line)
 
     return entries, failed_lines
+
+
+def dedupe_description(description: str, category: str) -> str:
+    """
+    Strips leading words from `description` that are already part of
+    `category` (case-insensitive, word-level). Used when a category is
+    edited to a longer, custom phrase that "eats into" what was
+    originally parsed as description — without this, the same words
+    would appear twice (once in category, once in description).
+
+    e.g. category "Млинці з шинкою та сиром" + leftover description
+    "з шинкою та сиром купив в гроші" -> "купив в гроші"
+    """
+    if not description or description == "-":
+        return description
+
+    desc_words = description.split()
+    category_words_lower = {w.lower() for w in category.split()}
+
+    while desc_words and desc_words[0].lower() in category_words_lower:
+        desc_words.pop(0)
+
+    return " ".join(desc_words) if desc_words else "-"
