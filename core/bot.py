@@ -5,12 +5,12 @@ import os
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand
 from dotenv import load_dotenv
 
 # Import the main router from handlers
 from core.handlers import router as main_router, ALLOWED_IDS
 from core.reminder import reminder_loop
+from core import language
 
 load_dotenv()
 
@@ -44,35 +44,19 @@ async def main():
     dp.include_router(main_router)
 
     # Register the command list so Telegram shows it in the "/" menu.
-    # set_my_commands supports a language_code scope: we register the
-    # Ukrainian list as the default (no language_code) and an English
-    # list scoped to language_code="en", so users whose Telegram client
-    # is set to English see English descriptions too — independent of
-    # the bot's own /language setting, which only affects chat replies.
-    commands_uk = [
-        BotCommand(command="start", description="Почати роботу з ботом"),
-        BotCommand(command="last", description="Показати останній запис"),
-        BotCommand(command="undo", description="Видалити останній запис"),
-        BotCommand(command="report", description="Звіт — оберу період і категорії кнопками"),
-        BotCommand(command="budget", description="Ліміти по категоріях — керування кнопками"),
-        BotCommand(command="export", description="Експорт усіх записів у CSV"),
-        BotCommand(command="find", description="Пошук: категорії кнопками або /find текст"),
-        BotCommand(command="remind", description="Нагадування — час(и) і увімк/вимк кнопками"),
-        BotCommand(command="language", description="Мова бота / Bot language"),
-    ]
-    commands_en = [
-        BotCommand(command="start", description="Start using the bot"),
-        BotCommand(command="last", description="Show the last entry"),
-        BotCommand(command="undo", description="Delete the last entry"),
-        BotCommand(command="report", description="Report — pick period and categories with buttons"),
-        BotCommand(command="budget", description="Category limits — managed with buttons"),
-        BotCommand(command="export", description="Export all entries to CSV"),
-        BotCommand(command="find", description="Search: category buttons or /find text"),
-        BotCommand(command="remind", description="Reminders — time(s) and on/off with buttons"),
-        BotCommand(command="language", description="Bot language / Мова бота"),
-    ]
-    await bot.set_my_commands(commands_uk)
-    await bot.set_my_commands(commands_en, language_code="en")
+    # The Ukrainian list is the global default (also used as the
+    # fallback for language_code="en" clients that haven't picked a
+    # bot language yet). On top of that, every user who already has a
+    # saved /language preference gets a per-chat override via
+    # BotCommandScopeChat, so the menu matches their bot-language
+    # choice rather than their Telegram client's own language — this
+    # also re-applies the override after a bot restart.
+    await bot.set_my_commands(language.COMMANDS_UK)
+    for user_id_str in ALLOWED_IDS:
+        try:
+            await language.apply_commands_for_chat(bot, int(user_id_str))
+        except ValueError:
+            continue
 
     # Background task: sends a daily reminder to log expenses if enabled
     if ALLOWED_IDS:

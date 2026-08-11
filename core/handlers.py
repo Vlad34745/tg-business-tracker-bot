@@ -263,6 +263,7 @@ async def cb_set_language(callback: CallbackQuery):
 
     new_lang = callback.data.split(":", 1)[1]
     language.set_language(callback.from_user.id, new_lang)
+    await language.apply_commands_for_chat(callback.bot, callback.from_user.id)
     await callback.answer()
     await callback.message.edit_text(t("language_set", new_lang))
 
