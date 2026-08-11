@@ -4,6 +4,8 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta
+from core import language
+from core.i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +121,10 @@ async def reminder_loop(bot, user_ids: list):
         if is_enabled():
             for user_id in user_ids:
                 try:
+                    lang = language.get_language(int(user_id))
                     await bot.send_message(
                         int(user_id),
-                        "🔔 <b>Нагадування:</b> не забудь записати сьогоднішні витрати!",
+                        t("daily_reminder_text", lang),
                         parse_mode="HTML"
                     )
                 except Exception as e:

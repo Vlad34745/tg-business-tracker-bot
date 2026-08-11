@@ -189,11 +189,11 @@ def _build_preview_keyboard(entry_id: str, lang: str = "uk") -> InlineKeyboardMa
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ обмежено. Цей бот є приватним фінансовим трекером.")
-        return
-
     lang = language.get_language(message.from_user.id)
+
+    if not is_owner(message.from_user.id):
+        await message.answer(t("access_denied_start", lang))
+        return
 
     if lang == "en":
         welcome_text = (
@@ -276,11 +276,11 @@ async def cmd_last(message: Message):
     try:
         row = await get_last_transaction()
     except Exception as e:
-        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await message.answer(t("err_sheet_read", lang, e=e))
         return
 
     if not row:
-        await message.answer("📭 У таблиці ще немає жодного запису.")
+        await message.answer(t("no_entries_yet", lang))
         return
 
     # Pad the row in case some trailing columns are empty
@@ -299,12 +299,12 @@ async def cmd_last(message: Message):
 
 @router.message(Command("undo"))
 async def cmd_undo(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     user_id = message.from_user.id
-    lang = language.get_language(user_id)
     last_count = _last_action_count.get(user_id, 1)
 
     if last_count > 1:
@@ -313,15 +313,15 @@ async def cmd_undo(message: Message):
         try:
             rows = await get_last_n_transactions(last_count)
         except Exception as e:
-            await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+            await message.answer(t("err_sheet_read", lang, e=e))
             return
 
         if not rows:
-            await message.answer("📭 У таблиці ще немає жодного запису для видалення.")
+            await message.answer(t("no_entries_to_delete", lang))
             return
 
         total = 0.0
-        preview_lines = [f"⚠️ <b>Видалити останні {len(rows)} записи (збережені разом)?</b>\n"]
+        preview_lines = [t("confirm_delete_batch", lang, n=len(rows))]
         for row in rows:
             date, type_tr, category, amount, description = _format_transaction(row)
             icon = "💰" if type_tr == "Income" else "📉"
@@ -330,7 +330,7 @@ async def cmd_undo(message: Message):
                 total += float(str(amount).replace(",", "."))
             except (ValueError, TypeError):
                 pass
-        preview_lines.append(f"\n💵 <b>Разом:</b> {total:.2f} грн")
+        preview_lines.append(t("total_label", lang, total=total))
 
         confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=t("btn_confirm_delete_n", lang, n=len(rows)), callback_data=f"undo_batch_confirm:{len(rows)}"),
@@ -343,11 +343,11 @@ async def cmd_undo(message: Message):
     try:
         row = await get_last_transaction()
     except Exception as e:
-        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await message.answer(t("err_sheet_read", lang, e=e))
         return
 
     if not row:
-        await message.answer("📭 У таблиці ще немає жодного запису для видалення.")
+        await message.answer(t("no_entries_to_delete", lang))
         return
 
     date, type_tr, category, amount, description = _format_transaction(row)
@@ -371,20 +371,21 @@ async def cmd_undo(message: Message):
 
 @router.callback_query(F.data.startswith("undo_batch_confirm:"))
 async def cb_undo_batch_confirm(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     n = int(callback.data.split(":", 1)[1])
     try:
         deleted_rows = await delete_last_n_transactions(n)
     except Exception as e:
-        await callback.message.edit_text(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+        await callback.message.edit_text(t("err_delete", lang, e=e))
         await callback.answer()
         return
 
     if not deleted_rows:
-        await callback.message.edit_text("📭 Немає записів для видалення.")
+        await callback.message.edit_text(t("no_entries_to_delete_short", lang))
         await callback.answer()
         return
 
@@ -392,33 +393,34 @@ async def cb_undo_batch_confirm(callback: CallbackQuery):
     # should remove just one row again unless another batch is saved.
     _last_action_count[callback.from_user.id] = 1
 
-    await callback.message.edit_text(f"🗑️ <b>Видалено {len(deleted_rows)} записів.</b>")
-    await callback.answer("Видалено")
+    await callback.message.edit_text(t("batch_deleted", lang, n=len(deleted_rows)))
+    await callback.answer(t("toast_deleted", lang))
 
 @router.callback_query(F.data == "undo_confirm")
 async def cb_undo_confirm(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     try:
         deleted_row = await delete_last_transaction()
     except Exception as e:
-        await callback.message.edit_text(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+        await callback.message.edit_text(t("err_delete", lang, e=e))
         await callback.answer()
         return
 
     if not deleted_row:
-        await callback.message.edit_text("📭 Немає записів для видалення.")
+        await callback.message.edit_text(t("no_entries_to_delete_short", lang))
         await callback.answer()
         return
 
-    await callback.message.edit_text("🗑️ <b>Запис видалено.</b>")
-    await callback.answer("Видалено")
+    await callback.message.edit_text(t("entry_deleted", lang))
+    await callback.answer(t("toast_deleted", lang))
 
 @router.callback_query(F.data == "undo_cancel")
 async def cb_undo_cancel(callback: CallbackQuery):
-    await callback.message.edit_text("Скасовано — запис залишився в таблиці.")
+    await callback.message.edit_text(t("undo_cancelled", language.get_language(callback.from_user.id)))
     await callback.answer()
 
 async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
@@ -430,6 +432,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
     text command or a button tap.
     """
     now = datetime.now()
+    lang = language.get_language(user_id)
 
     FULL_FLAG_WORDS = ("full", "all", "всі", "повний")
     full_report = any(arg.lower() in FULL_FLAG_WORDS for arg in raw_args)
@@ -442,7 +445,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
         if top_match:
             top_n = int(top_match.group(1))
             if top_n < 1:
-                await answer("❌ <b>Кількість категорій має бути більшою за 0.</b>")
+                await answer(t("report_categories_over_zero", lang))
                 return
         else:
             remaining_args.append(arg)
@@ -467,17 +470,17 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
         elif day_match:
             period_days = int(day_match.group(1))
             if period_days < 1:
-                await answer("❌ <b>Кількість днів має бути більшою за 0.</b>")
+                await answer(t("report_days_over_zero", lang))
                 return
         elif week_match:
             period_days = int(week_match.group(1)) * 7
             if period_days < 1:
-                await answer("❌ <b>Кількість тижнів має бути більшою за 0.</b>")
+                await answer(t("report_weeks_over_zero", lang))
                 return
         elif month_match:
             n_months = int(month_match.group(1))
             if n_months < 1:
-                await answer("❌ <b>Кількість місяців має бути більшою за 0.</b>")
+                await answer(t("report_months_over_zero", lang))
                 return
             custom_end = now.date()
             custom_start = subtract_months(custom_end, n_months)
@@ -485,7 +488,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
     try:
         rows = await get_all_transactions()
     except Exception as e:
-        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await answer(t("err_sheet_read", lang, e=e))
         return
 
     if custom_start is not None:
@@ -506,42 +509,37 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
                 if not (1 <= month <= 12):
                     raise ValueError
             except ValueError:
-                await answer(
-                    "❌ <b>Невірний формат.</b>\n"
-                    "Приклади: <code>/report</code>, <code>/report 6</code>, "
-                    "<code>/report 6 2026</code>, <code>/report 7d</code>, "
-                    "<code>/report week</code>"
-                )
+                await answer(t("report_bad_format", lang))
                 return
             if len(args) >= 2:
                 try:
                     year = int(args[1])
                 except ValueError:
-                    await answer("❌ <b>Невірний рік.</b>\nПриклад: <code>/report 6 2026</code>")
+                    await answer(t("report_bad_year", lang))
                     return
 
         summary = compute_monthly_report(rows, year, month)
-        period_label = format_month_label(year, month)
+        period_label = format_month_label(year, month, lang)
         is_month_mode = True
 
     if summary["count"] == 0:
-        await answer(f"📭 За <b>{period_label}</b> ще немає жодного запису.")
+        await answer(t("report_no_entries_period", lang, period_label=period_label))
         return
 
     balance_icon = "📈" if summary["balance"] >= 0 else "📉"
     lines = [
-        f"<b>📊 Звіт за {period_label}</b>\n",
-        f"💰 <b>Дохід:</b> {summary['income_total']:.2f} грн",
-        f"📉 <b>Витрати:</b> {summary['expense_total']:.2f} грн",
-        f"{balance_icon} <b>Баланс:</b> {summary['balance']:.2f} грн",
+        t("report_title", lang, period_label=period_label),
+        t("report_income_label", lang, v=summary['income_total']),
+        t("report_expense_label", lang, v=summary['expense_total']),
+        f"{balance_icon} " + t("report_balance_label", lang, v=summary['balance']),
     ]
 
     if full_report:
         categories_to_show = summary["expense_by_category"]
-        section_title = "🏷️ Усі категорії витрат (за сумою):"
+        section_title = t("report_all_categories_title", lang)
     else:
         categories_to_show = summary["expense_by_category"][:top_n]
-        section_title = f"🏷️ Топ-{top_n} категорій витрат:"
+        section_title = t("report_top_categories_title", lang, n=top_n)
 
     if categories_to_show:
         lines.append(f"\n<b>{section_title}</b>")
@@ -559,15 +557,16 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
             if spent > limit
         ]
         if overages:
-            lines.append("\n<b>⚠️ Перевищено ліміт:</b>")
+            lines.append(t("report_overage_title", lang))
             for category, spent, limit in overages:
                 lines.append(f"🔴 {category}: {spent:.2f} / {limit:.2f} грн")
 
     await answer("\n".join(lines))
 
     chart_buffer = generate_category_chart(
-        summary["expense_by_category"], f"Витрати за {period_label}",
-        top_n=len(summary["expense_by_category"]) if full_report else top_n
+        summary["expense_by_category"], t("report_chart_title", lang, period_label=period_label),
+        top_n=len(summary["expense_by_category"]) if full_report else top_n,
+        lang=lang
     )
     if chart_buffer:
         await answer_photo(
@@ -591,30 +590,28 @@ async def cmd_report(message: Message):
     await _generate_report(message.from_user.id, raw_args, message.answer, message.answer_photo)
 
 async def _show_budget_view(user_id: int, answer):
+    lang = language.get_language(user_id)
     try:
         budgets = parse_budgets_rows(await get_budgets())
     except Exception as e:
-        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await answer(t("err_sheet_read", lang, e=e))
         return
 
     if not budgets:
-        await answer(
-            "📭 <b>Ліміти ще не встановлені.</b>\n\n"
-            "Тисни «➕ Встановити ліміт» або пиши <code>/budget set Кафе 1000</code>"
-        )
+        await answer(t("budget_not_set_yet", lang))
         return
 
     try:
         rows = await get_all_transactions()
     except Exception as e:
-        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await answer(t("err_sheet_read", lang, e=e))
         return
 
     now = datetime.now()
     summary = compute_monthly_report(rows, now.year, now.month)
     spent_by_category = dict(summary["expense_by_category"])
 
-    lines = [f"<b>💼 Бюджет на {format_month_label(now.year, now.month)}</b>\n"]
+    lines = [t("budget_month_title", lang, month_label=format_month_label(now.year, now.month, lang))]
     for category, limit in sorted(budgets.items()):
         spent = spent_by_category.get(category, 0.0)
         pct = (spent / limit * 100) if limit else 0
@@ -632,8 +629,9 @@ def _budget_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
 
 @router.message(Command("budget"))
 async def cmd_budget(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     args = message.text.split()[1:]
@@ -641,9 +639,7 @@ async def cmd_budget(message: Message):
     # /budget set <category words...> <amount>
     if args and args[0].lower() == "set":
         if len(args) < 3:
-            await message.answer(
-                "❌ <b>Формат:</b> <code>/budget set Кафе 1000</code>"
-            )
+            await message.answer(t("budget_format_set", lang))
             return
         category_raw = " ".join(args[1:-1]).strip()
         category = category_raw[0].upper() + category_raw[1:] if category_raw else category_raw
@@ -652,59 +648,48 @@ async def cmd_budget(message: Message):
             if limit <= 0:
                 raise ValueError
         except ValueError:
-            await message.answer(
-                "❌ <b>Невірна сума ліміту.</b> Приклад: <code>/budget set Кафе 1000</code>"
-            )
+            await message.answer(t("budget_bad_amount", lang))
             return
 
         try:
             await set_budget(category, limit)
         except Exception as e:
-            await message.answer(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+            await message.answer(t("err_sheet_write", lang, e=e))
             return
 
-        await message.answer(
-            f"✅ Ліміт для <b>{category}</b> встановлено: {limit:.2f} грн/міс"
-        )
+        await message.answer(t("budget_limit_set", lang, category=category, limit=limit))
         return
 
     # /budget remove <category words...>
     if args and args[0].lower() in ("remove", "delete", "видалити"):
         if len(args) < 2:
-            await message.answer(
-                "❌ <b>Формат:</b> <code>/budget remove Кафе</code>"
-            )
+            await message.answer(t("budget_format_remove", lang))
             return
         category = " ".join(args[1:]).strip()
         try:
             deleted = await delete_budget(category)
         except Exception as e:
-            await message.answer(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+            await message.answer(t("err_delete", lang, e=e))
             return
 
         if deleted:
-            await message.answer(f"🗑️ Ліміт для <b>{category}</b> видалено.")
+            await message.answer(t("budget_limit_removed", lang, category=category))
         else:
-            await message.answer(f"📭 Ліміт для <b>{category}</b> не знайдено.")
+            await message.answer(t("budget_limit_not_found", lang, category=category))
         return
 
     if args:
-        await message.answer(
-            "❌ <b>Невідома команда.</b>\n\n"
-            "• <code>/budget</code> — показати всі ліміти\n"
-            "• <code>/budget set Кафе 1000</code> — встановити ліміт\n"
-            "• <code>/budget remove Кафе</code> — видалити ліміт"
-        )
+        await message.answer(t("budget_unknown_command", lang))
         return
 
     # No args: show a button menu instead of jumping straight to the view
-    lang = language.get_language(message.from_user.id)
     await message.answer(t("budget_menu_prompt", lang), reply_markup=_budget_menu_keyboard(lang))
 
 @router.callback_query(F.data == "budget_view")
 async def cb_budget_view(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -730,44 +715,47 @@ async def cb_budget_add(callback: CallbackQuery):
     ]
     buttons.append([InlineKeyboardButton(text=t("btn_custom_category", lang), callback_data="budget_set_cat_custom")])
     await callback.message.edit_text(
-        "🏷️ <b>Для якої категорії встановити ліміт?</b>",
+        t("budget_category_prompt", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
 @router.callback_query(F.data.startswith("budget_set_cat:"))
 async def cb_budget_set_category(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     category = callback.data.split(":", 1)[1]
     awaiting_budget_amount[callback.from_user.id] = category
     await callback.answer()
-    await callback.message.edit_text(f"💵 Напиши суму ліміту для <b>{category}</b> (напр. <code>1000</code>):")
+    await callback.message.edit_text(t("write_budget_amount", lang, category=category))
 
 @router.callback_query(F.data == "budget_set_cat_custom")
 async def cb_budget_set_category_custom(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     awaiting_budget_category[callback.from_user.id] = True
     await callback.answer()
-    await callback.message.edit_text("✏️ Напиши назву категорії:")
+    await callback.message.edit_text(t("write_category_name", lang))
 
 @router.callback_query(F.data == "budget_remove")
 async def cb_budget_remove(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
 
     try:
         budgets = parse_budgets_rows(await get_budgets())
     except Exception as e:
-        await callback.message.edit_text(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await callback.message.edit_text(t("err_sheet_read", lang, e=e))
         return
 
     if not budgets:
-        await callback.message.edit_text("📭 Ліміти ще не встановлені — нічого видаляти.")
+        await callback.message.edit_text(t("budget_none_to_remove", lang))
         return
 
     buttons = [
@@ -775,44 +763,46 @@ async def cb_budget_remove(callback: CallbackQuery):
         for cat in sorted(budgets.keys())
     ]
     await callback.message.edit_text(
-        "🗑 <b>Який ліміт видалити?</b>",
+        t("budget_which_to_remove", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
 @router.callback_query(F.data.startswith("budget_del_cat:"))
 async def cb_budget_delete_category(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     category = callback.data.split(":", 1)[1]
     try:
         deleted = await delete_budget(category)
     except Exception as e:
-        await callback.message.edit_text(f"❌ <b>Помилка видалення:</b> <code>{e}</code>")
+        await callback.message.edit_text(t("err_delete", lang, e=e))
         await callback.answer()
         return
 
-    await callback.answer("Видалено" if deleted else "Не знайдено")
+    await callback.answer(t("toast_deleted", lang) if deleted else t("toast_not_found", lang))
     if deleted:
-        await callback.message.edit_text(f"🗑️ Ліміт для <b>{category}</b> видалено.")
+        await callback.message.edit_text(t("budget_limit_removed", lang, category=category))
     else:
-        await callback.message.edit_text(f"📭 Ліміт для <b>{category}</b> не знайдено.")
+        await callback.message.edit_text(t("budget_limit_not_found", lang, category=category))
 
 @router.message(Command("export"))
 async def cmd_export(message: Message):
+    lang = language.get_language(message.from_user.id)
     if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+        await message.answer(t("access_denied", lang))
         return
 
     try:
         rows = await get_all_transactions()
     except Exception as e:
-        await message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await message.answer(t("err_sheet_read", lang, e=e))
         return
 
     if not rows:
-        await message.answer("📭 У таблиці ще немає жодного запису.")
+        await message.answer(t("no_entries_yet", lang))
         return
 
     csv_text = build_csv(rows)
@@ -822,19 +812,20 @@ async def cmd_export(message: Message):
 
     await message.answer_document(
         BufferedInputFile(file_bytes, filename=filename),
-        caption=f"📄 Експортовано {len(rows)} записів."
+        caption=t("export_caption", lang, n=len(rows))
     )
 
 async def _run_find(user_id: int, query: str, answer):
+    lang = language.get_language(user_id)
     try:
         rows = await get_all_transactions()
     except Exception as e:
-        await answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await answer(t("err_sheet_read", lang, e=e))
         return
 
     matches = filter_transactions(rows, query)
     if not matches:
-        await answer(f"🔍 Нічого не знайдено за запитом «{query}».")
+        await answer(t("find_no_results", lang, query=query))
         return
 
     total = 0.0
@@ -846,15 +837,15 @@ async def _run_find(user_id: int, query: str, answer):
 
     MAX_SHOWN = 20
     shown = matches[-MAX_SHOWN:]
-    truncated_note = f" (показано останні {MAX_SHOWN})" if len(matches) > MAX_SHOWN else ""
+    truncated_note = t("find_truncated_note", lang, n=MAX_SHOWN) if len(matches) > MAX_SHOWN else ""
 
-    lines = [f"🔍 <b>Знайдено {len(matches)} записів за «{query}»{truncated_note}:</b>\n"]
+    lines = [t("find_results_title", lang, n=len(matches), query=query, truncated_note=truncated_note)]
     for row in shown:
         padded = row + ["-"] * (5 - len(row))
         date, type_tr, category, amount, description = padded[:5]
         icon = "💰" if type_tr == "Income" else "📉"
         lines.append(f"{icon} {date} | {category}: {amount} грн | {description}")
-    lines.append(f"\n💵 <b>Загальна сума:</b> {total:.2f} грн")
+    lines.append(t("find_total_label", lang, total=total))
 
     await answer("\n".join(lines))
 
@@ -876,7 +867,7 @@ async def cmd_find(message: Message):
             top_categories = []
 
         if not top_categories:
-            await message.answer("❌ <b>Формат:</b> <code>/find кафе</code>")
+            await message.answer(t("find_format_hint", lang))
             return
 
         buttons = [
@@ -894,8 +885,9 @@ async def cmd_find(message: Message):
 
 @router.callback_query(F.data.startswith("find_cat:"))
 async def cb_find_category(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     query = callback.data.split(":", 1)[1]
     await callback.answer()
@@ -904,12 +896,13 @@ async def cb_find_category(callback: CallbackQuery):
 
 @router.callback_query(F.data == "find_custom")
 async def cb_find_custom(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     awaiting_find_query[callback.from_user.id] = True
     await callback.answer()
-    await callback.message.edit_text("✏️ Напиши, що шукаємо:")
+    await callback.message.edit_text(t("write_search_query", lang))
 
 def _remind_status_text(lang: str = "uk") -> str:
     status = t("remind_status_on", lang) if reminder.is_enabled() else t("remind_status_off", lang)
@@ -943,30 +936,21 @@ async def cmd_remind(message: Message):
     sub = args[0].lower()
     if sub in ("on", "увімкнути"):
         reminder.set_enabled(True)
-        await message.answer("🔔 Нагадування увімкнено." if lang == "uk" else "🔔 Reminders turned on.")
+        await message.answer(t("remind_on_msg", lang))
     elif sub in ("off", "вимкнути"):
         reminder.set_enabled(False)
-        await message.answer("🔕 Нагадування вимкнено." if lang == "uk" else "🔕 Reminders turned off.")
+        await message.answer(t("remind_off_msg", lang))
     elif sub in ("add",) and len(args) >= 2 and reminder.is_valid_time(args[1]):
         added = reminder.add_time(args[1])
         norm = reminder.normalize_time(args[1])
-        if lang == "uk":
-            msg = f"✅ Час {norm} додано." if added else f"⏰ {norm} вже в списку."
-        else:
-            msg = f"✅ Time {norm} added." if added else f"⏰ {norm} is already in the list."
+        msg = t("remind_time_added", lang, time=norm) if added else t("remind_time_exists", lang, time=norm)
         await message.answer(msg)
     elif sub in ("remove", "del") and len(args) >= 2:
         removed = reminder.remove_time(reminder.normalize_time(args[1]) if reminder.is_valid_time(args[1]) else args[1])
-        if lang == "uk":
-            msg = "🗑️ Час видалено." if removed else "📭 Такого часу немає в списку."
-        else:
-            msg = "🗑️ Time removed." if removed else "📭 That time isn't in the list."
+        msg = t("remind_time_removed", lang) if removed else t("remind_time_not_found", lang)
         await message.answer(msg)
     else:
-        await message.answer(
-            "❌ <b>Формат:</b> <code>/remind on</code>, <code>/remind off</code>,\n"
-            "<code>/remind add 09:00</code>, <code>/remind remove 09:00</code>"
-        )
+        await message.answer(t("remind_format_hint", lang))
 
 @router.callback_query(F.data == "remind_on")
 async def cb_remind_on(callback: CallbackQuery):
@@ -975,7 +959,7 @@ async def cb_remind_on(callback: CallbackQuery):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
     reminder.set_enabled(True)
-    await callback.answer("Увімкнено" if lang == "uk" else "Turned on")
+    await callback.answer(t("toast_turned_on", lang))
     await callback.message.edit_text(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
 
 @router.callback_query(F.data == "remind_off")
@@ -985,7 +969,7 @@ async def cb_remind_off(callback: CallbackQuery):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
     reminder.set_enabled(False)
-    await callback.answer("Вимкнено" if lang == "uk" else "Turned off")
+    await callback.answer(t("toast_turned_off", lang))
     await callback.message.edit_text(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
 
 @router.callback_query(F.data == "remind_add_time")
@@ -996,9 +980,7 @@ async def cb_remind_add_time(callback: CallbackQuery):
         return
     awaiting_remind_time[callback.from_user.id] = True
     await callback.answer()
-    prompt = ("✏️ Напиши час у форматі <code>ГГ:ХХ</code>, наприклад <code>09:00</code>:" if lang == "uk"
-              else "✏️ Write a time as <code>HH:MM</code>, e.g. <code>09:00</code>:")
-    await callback.message.edit_text(prompt)
+    await callback.message.edit_text(t("remind_time_prompt", lang))
 
 @router.callback_query(F.data == "remind_remove_time")
 async def cb_remind_remove_time(callback: CallbackQuery):
@@ -1013,8 +995,7 @@ async def cb_remind_remove_time(callback: CallbackQuery):
         [InlineKeyboardButton(text=time_str, callback_data=f"remind_del_time:{time_str}")]
         for time_str in times
     ]
-    prompt = "🗑 <b>Який час видалити?</b>" if lang == "uk" else "🗑 <b>Which time to remove?</b>"
-    await callback.message.edit_text(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.message.edit_text(t("remind_which_to_remove", lang), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("remind_del_time:"))
 async def cb_remind_delete_time(callback: CallbackQuery):
@@ -1024,7 +1005,7 @@ async def cb_remind_delete_time(callback: CallbackQuery):
         return
     time_str = callback.data.split(":", 1)[1]
     reminder.remove_time(time_str)
-    await callback.answer("Видалено" if lang == "uk" else "Removed")
+    await callback.answer(t("toast_deleted", lang))
     await callback.message.edit_text(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
 
 @router.callback_query(F.data.startswith("entry_confirm:"))
@@ -1038,8 +1019,8 @@ async def cb_entry_confirm(callback: CallbackQuery):
     entry = pending_entries.pop(entry_id, None)
 
     if not entry:
-        await callback.answer("⌛ Запис застарів, спробуй надіслати ще раз.", show_alert=True)
-        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        await callback.answer(t("entry_expired", lang), show_alert=True)
+        await callback.message.edit_text(t("confirmation_expired_body", lang))
         return
 
     try:
@@ -1059,27 +1040,28 @@ async def cb_entry_confirm(callback: CallbackQuery):
         )
         await callback.answer(t("toast_saved", lang))
     except Exception as e:
-        await callback.message.edit_text(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+        await callback.message.edit_text(t("err_sheet_write", lang, e=e))
         await callback.answer()
 
 @router.callback_query(F.data.startswith("entry_cancel:"))
 async def cb_entry_cancel(callback: CallbackQuery):
     entry_id = callback.data.split(":", 1)[1]
     pending_entries.pop(entry_id, None)
-    await callback.message.edit_text("❌ Скасовано — запис не додано.")
+    await callback.message.edit_text(t("entry_cancelled", language.get_language(callback.from_user.id)))
     await callback.answer()
 
 @router.callback_query(F.data.startswith("entry_edit_cat:"))
 async def cb_entry_edit_category(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     entry_id = callback.data.split(":", 1)[1]
     entry = pending_entries.get(entry_id)
     if not entry:
-        await callback.answer("⌛ Запис застарів, спробуй надіслати ще раз.", show_alert=True)
-        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        await callback.answer(t("entry_expired", lang), show_alert=True)
+        await callback.message.edit_text(t("confirmation_expired_body", lang))
         return
 
     try:
@@ -1093,14 +1075,14 @@ async def cb_entry_edit_category(callback: CallbackQuery):
         for cat in top_categories
     ]
     buttons.append([
-        InlineKeyboardButton(text="✏️ Свій варіант", callback_data=f"custom_cat:{entry_id}")
+        InlineKeyboardButton(text=t("btn_custom_option", lang), callback_data=f"custom_cat:{entry_id}")
     ])
     buttons.append([
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"back_to_preview:{entry_id}")
+        InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"back_to_preview:{entry_id}")
     ])
 
     await callback.message.edit_text(
-        "🏷️ <b>Обери категорію або введи свою:</b>",
+        t("pick_category_prompt", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -1115,8 +1097,8 @@ async def cb_set_category(callback: CallbackQuery):
     _, entry_id, new_category = callback.data.split(":", 2)
     entry = pending_entries.get(entry_id)
     if not entry:
-        await callback.answer("⌛ Запис застарів.", show_alert=True)
-        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        await callback.answer(t("entry_expired_short", lang), show_alert=True)
+        await callback.message.edit_text(t("confirmation_expired_body", lang))
         return
 
     entry["category"] = new_category
@@ -1124,22 +1106,23 @@ async def cb_set_category(callback: CallbackQuery):
         _build_preview_text(entry, lang),
         reply_markup=_build_preview_keyboard(entry_id, lang)
     )
-    await callback.answer("Категорію оновлено")
+    await callback.answer(t("category_updated", lang))
 
 @router.callback_query(F.data.startswith("custom_cat:"))
 async def cb_custom_category(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     entry_id = callback.data.split(":", 1)[1]
     if entry_id not in pending_entries:
-        await callback.answer("⌛ Запис застарів.", show_alert=True)
-        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        await callback.answer(t("entry_expired_short", lang), show_alert=True)
+        await callback.message.edit_text(t("confirmation_expired_body", lang))
         return
 
     awaiting_category_text[callback.from_user.id] = entry_id
-    await callback.message.edit_text("✏️ Напиши нову назву категорії повідомленням:")
+    await callback.message.edit_text(t("write_new_category", lang))
     await callback.answer()
 
 @router.callback_query(F.data.startswith("back_to_preview:"))
@@ -1148,8 +1131,8 @@ async def cb_back_to_preview(callback: CallbackQuery):
     entry_id = callback.data.split(":", 1)[1]
     entry = pending_entries.get(entry_id)
     if not entry:
-        await callback.answer("⌛ Запис застарів.", show_alert=True)
-        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакцію ще раз.")
+        await callback.answer(t("entry_expired_short", lang), show_alert=True)
+        await callback.message.edit_text(t("confirmation_expired_body", lang))
         return
 
     await callback.message.edit_text(
@@ -1160,15 +1143,16 @@ async def cb_back_to_preview(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("batch_confirm:"))
 async def cb_batch_confirm(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     batch_id = callback.data.split(":", 1)[1]
     entries = pending_batches.pop(batch_id, None)
     if not entries:
-        await callback.answer("⌛ Записи застаріли, спробуй ще раз.", show_alert=True)
-        await callback.message.edit_text("⌛ <b>Час підтвердження вичерпано.</b> Надішли транзакції ще раз.")
+        await callback.answer(t("entries_expired", lang), show_alert=True)
+        await callback.message.edit_text(t("confirmation_expired_body_batch", lang))
         return
 
     saved = 0
@@ -1185,13 +1169,13 @@ async def cb_batch_confirm(callback: CallbackQuery):
 
     if saved == len(entries):
         _last_action_count[callback.from_user.id] = saved
-        await callback.message.edit_text(f"✅ <b>Збережено всі {saved} записів!</b>")
-        await callback.answer("Збережено")
+        await callback.message.edit_text(t("batch_saved_all", lang, n=saved))
+        await callback.answer(t("toast_saved", lang))
     else:
         if saved > 0:
             _last_action_count[callback.from_user.id] = saved
         await callback.message.edit_text(
-            f"⚠️ <b>Збережено {saved} з {len(entries)} записів.</b> Решта не записалась через помилку."
+            t("batch_saved_partial", lang, saved=saved, total=len(entries))
         )
         await callback.answer()
 
@@ -1199,7 +1183,7 @@ async def cb_batch_confirm(callback: CallbackQuery):
 async def cb_batch_cancel(callback: CallbackQuery):
     batch_id = callback.data.split(":", 1)[1]
     pending_batches.pop(batch_id, None)
-    await callback.message.edit_text("❌ Скасовано — жоден запис не додано.")
+    await callback.message.edit_text(t("batch_cancelled", language.get_language(callback.from_user.id)))
     await callback.answer()
 
 @router.callback_query(F.data == "nav:last")
@@ -1213,11 +1197,11 @@ async def cb_nav_last(callback: CallbackQuery):
     try:
         row = await get_last_transaction()
     except Exception as e:
-        await callback.message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await callback.message.answer(t("err_sheet_read", lang, e=e))
         return
 
     if not row:
-        await callback.message.answer("📭 У таблиці ще немає жодного запису.")
+        await callback.message.answer(t("no_entries_yet", lang))
         return
 
     date, type_tr, category, amount, description = _format_transaction(row)
@@ -1247,14 +1231,14 @@ async def cb_nav_undo(callback: CallbackQuery):
         try:
             rows = await get_last_n_transactions(last_count)
         except Exception as e:
-            await callback.message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+            await callback.message.answer(t("err_sheet_read", lang, e=e))
             return
         if not rows:
-            await callback.message.answer("📭 У таблиці ще немає жодного запису для видалення.")
+            await callback.message.answer(t("no_entries_to_delete", lang))
             return
 
         total = 0.0
-        preview_lines = [f"⚠️ <b>Видалити останні {len(rows)} записи (збережені разом)?</b>\n"]
+        preview_lines = [t("confirm_delete_batch", lang, n=len(rows))]
         for row in rows:
             date, type_tr, category, amount, description = _format_transaction(row)
             icon = "💰" if type_tr == "Income" else "📉"
@@ -1263,7 +1247,7 @@ async def cb_nav_undo(callback: CallbackQuery):
                 total += float(str(amount).replace(",", "."))
             except (ValueError, TypeError):
                 pass
-        preview_lines.append(f"\n💵 <b>Разом:</b> {total:.2f} грн")
+        preview_lines.append(t("total_label", lang, total=total))
 
         confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=t("btn_confirm_delete_n", lang, n=len(rows)), callback_data=f"undo_batch_confirm:{len(rows)}"),
@@ -1275,10 +1259,10 @@ async def cb_nav_undo(callback: CallbackQuery):
     try:
         row = await get_last_transaction()
     except Exception as e:
-        await callback.message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await callback.message.answer(t("err_sheet_read", lang, e=e))
         return
     if not row:
-        await callback.message.answer("📭 У таблиці ще немає жодного запису для видалення.")
+        await callback.message.answer(t("no_entries_to_delete", lang))
         return
 
     date, type_tr, category, amount, description = _format_transaction(row)
@@ -1335,11 +1319,7 @@ async def cb_report_period(callback: CallbackQuery):
     if choice == "custom":
         awaiting_report_args[callback.from_user.id] = True
         await callback.answer()
-        await callback.message.edit_text(
-            "✏️ Напиши період повідомленням, наприклад:\n"
-            "<code>7d</code>, <code>6</code>, <code>6 2026</code>, <code>top10</code>, <code>full</code>\n"
-            "або просто залиш пустим — надішли крапку <code>.</code> для поточного місяця."
-        )
+        await callback.message.edit_text(t("report_custom_period_prompt", lang))
         return
 
     await callback.answer()
@@ -1360,8 +1340,9 @@ async def cb_report_period(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("report_gen:"))
 async def cb_report_generate(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
     _, period_choice, top_choice = callback.data.split(":", 2)
@@ -1369,7 +1350,7 @@ async def cb_report_generate(callback: CallbackQuery):
     if top_choice == "customtop":
         awaiting_report_topn[callback.from_user.id] = period_choice
         await callback.answer()
-        await callback.message.edit_text("✏️ Напиши число — скільки категорій показати (наприклад <code>7</code>):")
+        await callback.message.edit_text(t("report_custom_topn_prompt", lang))
         return
 
     args = list(PERIOD_ARGS_MAP.get(period_choice, []))
@@ -1393,19 +1374,20 @@ async def cb_nav_budget(callback: CallbackQuery):
 
 @router.callback_query(F.data == "nav:export")
 async def cb_nav_export(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
     if not is_owner(callback.from_user.id):
-        await callback.answer("🔒 Доступ заблоковано.", show_alert=True)
+        await callback.answer(t("access_denied", lang), show_alert=True)
         return
     await callback.answer()
 
     try:
         rows = await get_all_transactions()
     except Exception as e:
-        await callback.message.answer(f"❌ <b>Помилка читання таблиці:</b> <code>{e}</code>")
+        await callback.message.answer(t("err_sheet_read", lang, e=e))
         return
 
     if not rows:
-        await callback.message.answer("📭 У таблиці ще немає жодного запису.")
+        await callback.message.answer(t("no_entries_yet", lang))
         return
 
     csv_text = build_csv(rows)
@@ -1413,18 +1395,19 @@ async def cb_nav_export(callback: CallbackQuery):
     filename = f"transactions_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     await callback.message.answer_document(
         BufferedInputFile(file_bytes, filename=filename),
-        caption=f"📄 Експортовано {len(rows)} записів."
+        caption=t("export_caption", lang, n=len(rows))
     )
 
 @router.message(F.text)
 async def handle_financial_entry(message: Message):
-    if not is_owner(message.from_user.id):
-        await message.answer("🔒 Доступ заблоковано.")
+    user_id = message.from_user.id
+    lang = language.get_language(user_id)
+    if not is_owner(user_id):
+        await message.answer(t("access_denied", lang))
         return
 
     # If we're mid-flow waiting for a custom category name, treat this
     # message as that answer instead of parsing it as a new transaction.
-    user_id = message.from_user.id
 
     if user_id in awaiting_report_args:
         awaiting_report_args.pop(user_id)
@@ -1441,7 +1424,7 @@ async def handle_financial_entry(message: Message):
             if n < 1:
                 raise ValueError
         except ValueError:
-            await message.answer("❌ <b>Напиши ціле число більше 0</b>, наприклад <code>7</code>.")
+            await message.answer(t("int_over_zero_prompt", lang))
             return
         args = list(PERIOD_ARGS_MAP.get(period_choice, [])) + [f"top{n}"]
         await _generate_report(user_id, args, message.answer, message.answer_photo)
@@ -1449,19 +1432,13 @@ async def handle_financial_entry(message: Message):
 
     if user_id in awaiting_remind_time:
         awaiting_remind_time.pop(user_id)
-        lang = language.get_language(user_id)
         text = message.text.strip()
         if not reminder.is_valid_time(text):
-            err = ("❌ <b>Невірний формат.</b> Напиши час як <code>ГГ:ХХ</code>, наприклад <code>09:00</code>." if lang == "uk"
-                   else "❌ <b>Invalid format.</b> Write a time as <code>HH:MM</code>, e.g. <code>09:00</code>.")
-            await message.answer(err)
+            await message.answer(t("remind_time_invalid", lang))
             return
         added = reminder.add_time(text)
         norm = reminder.normalize_time(text)
-        if lang == "uk":
-            msg = f"✅ Час {norm} додано." if added else f"⏰ {norm} вже в списку."
-        else:
-            msg = f"✅ Time {norm} added." if added else f"⏰ {norm} is already in the list."
+        msg = t("remind_time_added", lang, time=norm) if added else t("remind_time_exists", lang, time=norm)
         await message.answer(msg, reply_markup=_remind_menu_keyboard(lang))
         return
 
@@ -1469,7 +1446,7 @@ async def handle_financial_entry(message: Message):
         awaiting_find_query.pop(user_id)
         query = message.text.strip()
         if not query:
-            await message.answer("❌ Запит не може бути порожнім.")
+            await message.answer(t("query_empty", lang))
             return
         await _run_find(user_id, query, message.answer)
         return
@@ -1479,10 +1456,10 @@ async def handle_financial_entry(message: Message):
         category_raw = message.text.strip()
         category = category_raw[0].upper() + category_raw[1:] if category_raw else category_raw
         if not category:
-            await message.answer("❌ Назва категорії не може бути порожньою.")
+            await message.answer(t("category_empty", lang))
             return
         awaiting_budget_amount[user_id] = category
-        await message.answer(f"💵 Напиши суму ліміту для <b>{category}</b> (напр. <code>1000</code>):")
+        await message.answer(t("write_budget_amount", lang, category=category))
         return
 
     if user_id in awaiting_budget_amount:
@@ -1492,21 +1469,21 @@ async def handle_financial_entry(message: Message):
             if limit <= 0:
                 raise ValueError
         except ValueError:
-            await message.answer("❌ <b>Напиши додатне число</b>, наприклад <code>1000</code>.")
+            await message.answer(t("positive_number_prompt", lang))
             return
         try:
             await set_budget(category, limit)
         except Exception as e:
-            await message.answer(f"❌ <b>Помилка запису:</b> <code>{e}</code>")
+            await message.answer(t("err_sheet_write", lang, e=e))
             return
-        await message.answer(f"✅ Ліміт для <b>{category}</b> встановлено: {limit:.2f} грн/міс")
+        await message.answer(t("budget_limit_set", lang, category=category, limit=limit))
         return
 
     if user_id in awaiting_category_text:
         entry_id = awaiting_category_text.pop(user_id)
         entry = pending_entries.get(entry_id)
         if not entry:
-            await message.answer("⌛ Запис застарів, спробуй надіслати транзакцію ще раз.")
+            await message.answer(t("entry_expired", lang))
             return
 
         new_category = message.text.strip()
@@ -1515,8 +1492,8 @@ async def handle_financial_entry(message: Message):
             entry["category"] = new_category[0].upper() + new_category[1:]
 
         await message.answer(
-            _build_preview_text(entry, language.get_language(user_id)),
-            reply_markup=_build_preview_keyboard(entry_id, language.get_language(user_id))
+            _build_preview_text(entry, lang),
+            reply_markup=_build_preview_keyboard(entry_id, lang)
         )
         return
 
@@ -1528,27 +1505,25 @@ async def handle_financial_entry(message: Message):
         entries, failed_lines = parse_multiline_message(message.text, current_date)
 
         if not entries:
-            await message.answer(
-                "❌ <b>Жоден рядок не вдалося розпізнати.</b> Спробуй формат: <code>500 Продукти</code>"
-            )
+            await message.answer(t("unrecognized_lines", lang))
             return
 
         batch_id = _store_pending_batch(entries)
 
-        preview_lines = [f"👀 <b>Перевір {len(entries)} записів перед збереженням:</b>\n"]
+        preview_lines = [t("batch_preview_title", lang, n=len(entries))]
         for entry in entries:
             icon = "💰" if entry["type_tr"] == "Income" else "📉"
             preview_lines.append(
                 f"{icon} {entry['category']}: {entry['amount']} грн — {entry['description']}"
             )
         if failed_lines:
-            preview_lines.append(f"\n⚠️ <b>Не розпізнано ({len(failed_lines)}):</b>")
+            preview_lines.append(t("batch_unrecognized_title", lang, n=len(failed_lines)))
             for line in failed_lines:
                 preview_lines.append(f"• {line}")
 
         batch_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=t("btn_save_all", language.get_language(user_id), n=len(entries)), callback_data=f"batch_confirm:{batch_id}"),
-            InlineKeyboardButton(text=t("btn_cancel", language.get_language(user_id)), callback_data=f"batch_cancel:{batch_id}"),
+            InlineKeyboardButton(text=t("btn_save_all", lang, n=len(entries)), callback_data=f"batch_confirm:{batch_id}"),
+            InlineKeyboardButton(text=t("btn_cancel", lang), callback_data=f"batch_cancel:{batch_id}"),
         ]])
 
         await message.answer("\n".join(preview_lines), reply_markup=batch_keyboard)
@@ -1556,7 +1531,7 @@ async def handle_financial_entry(message: Message):
 
     parsed_data = parse_financial_message(message.text)
     if not parsed_data:
-        await message.answer("❌ <b>Не вдалося розпізнати формат.</b> Спробуй: <code>500 Продукти</code>")
+        await message.answer(t("unrecognized_format", lang))
         return
 
     type_tr, category, amount, description = parsed_data
@@ -1569,6 +1544,6 @@ async def handle_financial_entry(message: Message):
     })
 
     await message.answer(
-        _build_preview_text(pending_entries[entry_id], language.get_language(user_id)),
-        reply_markup=_build_preview_keyboard(entry_id, language.get_language(user_id))
+        _build_preview_text(pending_entries[entry_id], lang),
+        reply_markup=_build_preview_keyboard(entry_id, lang)
     )

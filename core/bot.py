@@ -43,8 +43,13 @@ async def main():
     # Include the main routing layer
     dp.include_router(main_router)
 
-    # Register the command list so Telegram shows it in the "/" menu
-    await bot.set_my_commands([
+    # Register the command list so Telegram shows it in the "/" menu.
+    # set_my_commands supports a language_code scope: we register the
+    # Ukrainian list as the default (no language_code) and an English
+    # list scoped to language_code="en", so users whose Telegram client
+    # is set to English see English descriptions too — independent of
+    # the bot's own /language setting, which only affects chat replies.
+    commands_uk = [
         BotCommand(command="start", description="Почати роботу з ботом"),
         BotCommand(command="last", description="Показати останній запис"),
         BotCommand(command="undo", description="Видалити останній запис"),
@@ -54,7 +59,20 @@ async def main():
         BotCommand(command="find", description="Пошук: категорії кнопками або /find текст"),
         BotCommand(command="remind", description="Нагадування — час(и) і увімк/вимк кнопками"),
         BotCommand(command="language", description="Мова бота / Bot language"),
-    ])
+    ]
+    commands_en = [
+        BotCommand(command="start", description="Start using the bot"),
+        BotCommand(command="last", description="Show the last entry"),
+        BotCommand(command="undo", description="Delete the last entry"),
+        BotCommand(command="report", description="Report — pick period and categories with buttons"),
+        BotCommand(command="budget", description="Category limits — managed with buttons"),
+        BotCommand(command="export", description="Export all entries to CSV"),
+        BotCommand(command="find", description="Search: category buttons or /find text"),
+        BotCommand(command="remind", description="Reminders — time(s) and on/off with buttons"),
+        BotCommand(command="language", description="Bot language / Мова бота"),
+    ]
+    await bot.set_my_commands(commands_uk)
+    await bot.set_my_commands(commands_en, language_code="en")
 
     # Background task: sends a daily reminder to log expenses if enabled
     if ALLOWED_IDS:

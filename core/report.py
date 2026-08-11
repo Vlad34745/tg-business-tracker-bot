@@ -2,11 +2,17 @@ import calendar
 from datetime import datetime, date
 from typing import Optional, Callable
 
-# Ukrainian month names (genitive-adjacent, used as "Звіт за <Month> <Year>")
+# Month names used in report/budget titles, e.g. "Звіт за <Month> <Year>"
+# or "Report for <Month> <Year>".
 MONTH_NAMES_UA = {
     1: "Січень", 2: "Лютий", 3: "Березень", 4: "Квітень",
     5: "Травень", 6: "Червень", 7: "Липень", 8: "Серпень",
     9: "Вересень", 10: "Жовтень", 11: "Листопад", 12: "Грудень",
+}
+MONTH_NAMES_EN = {
+    1: "January", 2: "February", 3: "March", 4: "April",
+    5: "May", 6: "June", 7: "July", 8: "August",
+    9: "September", 10: "October", 11: "November", 12: "December",
 }
 
 # Dates may come back from the Sheets API in either the format they were
@@ -110,9 +116,10 @@ def compute_period_report(rows: list, start: date, end: date) -> dict:
     return _aggregate_rows(rows, lambda d: start <= d.date() <= end)
 
 
-def format_month_label(year: int, month: int) -> str:
-    """e.g. 'Липень 2026'"""
-    return f"{MONTH_NAMES_UA.get(month, str(month))} {year}"
+def format_month_label(year: int, month: int, lang: str = "uk") -> str:
+    """e.g. 'Липень 2026' (uk) or 'July 2026' (en)"""
+    names = MONTH_NAMES_EN if lang == "en" else MONTH_NAMES_UA
+    return f"{names.get(month, str(month))} {year}"
 
 
 def format_period_label(start: date, end: date) -> str:

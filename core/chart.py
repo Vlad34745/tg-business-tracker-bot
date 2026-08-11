@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 # box, so Ukrainian category labels render correctly with no extra setup.
 
 
-def generate_category_chart(expense_by_category: list, title: str, top_n: int = 10):
+def generate_category_chart(expense_by_category: list, title: str, top_n: int = 10, lang: str = "uk"):
     """
     Render a horizontal bar chart of expenses by category.
 
@@ -17,6 +17,7 @@ def generate_category_chart(expense_by_category: list, title: str, top_n: int = 
         title: chart title, e.g. "Витрати за Липень 2026".
         top_n: cap the number of bars shown, to keep the chart readable
             when there are many categories.
+        lang: "uk" or "en" — controls the x-axis label language.
 
     Returns:
         A BytesIO buffer containing a PNG image, or None if there's no
@@ -35,7 +36,7 @@ def generate_category_chart(expense_by_category: list, title: str, top_n: int = 
     fig, ax = plt.subplots(figsize=(8, fig_height))
     bars = ax.barh(categories, amounts, color="#4C9AFF")
 
-    ax.set_xlabel("Сума, грн")
+    ax.set_xlabel("Amount, грн" if lang == "en" else "Сума, грн")
     ax.set_title(title)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
