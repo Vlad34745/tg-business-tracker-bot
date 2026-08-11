@@ -22,6 +22,9 @@ TRANSLATIONS = {
     "btn_report": {"uk": "📊 Звіт", "en": "📊 Report"},
     "btn_budget": {"uk": "💼 Бюджет", "en": "💼 Budget"},
     "btn_export": {"uk": "📄 Експорт", "en": "📄 Export"},
+    "btn_find": {"uk": "🔍 Пошук", "en": "🔍 Find"},
+    "btn_remind": {"uk": "🔔 Нагадування", "en": "🔔 Remind"},
+    "btn_language": {"uk": "🌐 Мова", "en": "🌐 Language"},
 
     # --- Save/cancel buttons ---
     "btn_save": {"uk": "✅ Зберегти", "en": "✅ Save"},

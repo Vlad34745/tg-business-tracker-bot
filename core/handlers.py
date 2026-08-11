@@ -141,7 +141,12 @@ def _quick_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=t("btn_budget", lang), callback_data="nav:budget"),
         ],
         [
+            InlineKeyboardButton(text=t("btn_find", lang), callback_data="nav:find"),
+            InlineKeyboardButton(text=t("btn_remind", lang), callback_data="nav:remind"),
+        ],
+        [
             InlineKeyboardButton(text=t("btn_export", lang), callback_data="nav:export"),
+            InlineKeyboardButton(text=t("btn_language", lang), callback_data="nav:language"),
         ],
     ])
 
@@ -1398,6 +1403,56 @@ async def cb_nav_export(callback: CallbackQuery):
         BufferedInputFile(file_bytes, filename=filename),
         caption=t("export_caption", lang, n=len(rows))
     )
+
+@router.callback_query(F.data == "nav:find")
+async def cb_nav_find(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
+    if not is_owner(callback.from_user.id):
+        await callback.answer(t("access_denied", lang), show_alert=True)
+        return
+    await callback.answer()
+
+    try:
+        rows = await get_all_transactions()
+        top_categories = get_frequent_categories(rows, limit=8)
+    except Exception:
+        top_categories = []
+
+    if not top_categories:
+        await callback.message.answer(t("find_format_hint", lang))
+        return
+
+    buttons = [
+        [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{cat}")]
+        for cat in top_categories
+    ]
+    buttons.append([InlineKeyboardButton(text=t("btn_enter_text", lang), callback_data="find_custom")])
+    await callback.message.answer(
+        t("find_prompt", lang),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+@router.callback_query(F.data == "nav:remind")
+async def cb_nav_remind(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
+    if not is_owner(callback.from_user.id):
+        await callback.answer(t("access_denied", lang), show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.answer(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
+
+@router.callback_query(F.data == "nav:language")
+async def cb_nav_language(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
+    if not is_owner(callback.from_user.id):
+        await callback.answer(t("access_denied", lang), show_alert=True)
+        return
+    await callback.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🇺🇦 Українська", callback_data="lang_set:uk"),
+        InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_set:en"),
+    ]])
+    await callback.message.answer(t("language_prompt", lang), reply_markup=keyboard)
 
 @router.message(F.text)
 async def handle_financial_entry(message: Message):
