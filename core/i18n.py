@@ -194,6 +194,7 @@ TRANSLATIONS = {
     "report_top_categories_title": {"uk": "🏷️ Топ-{n} категорій витрат:", "en": "🏷️ Top-{n} expense categories:"},
     "report_overage_title": {"uk": "\n<b>⚠️ Перевищено ліміт:</b>", "en": "\n<b>⚠️ Limit exceeded:</b>"},
     "report_chart_title": {"uk": "Витрати за {period_label}", "en": "Expenses for {period_label}"},
+    "chart_too_large": {"uk": "📊 Забагато категорій ({n}) для наочного графіка — пропускаю його, дивись список категорій вище.", "en": "📊 Too many categories ({n}) for a readable chart — skipping it, see the category list above."},
     "report_custom_period_prompt": {"uk": "✏️ Напиши період повідомленням, наприклад:\n<code>7d</code>, <code>6</code>, <code>6 2026</code>, <code>top10</code>, <code>full</code>\nабо просто залиш пустим — надішли крапку <code>.</code> для поточного місяця.", "en": "✏️ Write the period as a message, e.g.:\n<code>7d</code>, <code>6</code>, <code>6 2026</code>, <code>top10</code>, <code>full</code>\nor just leave it empty — send a dot <code>.</code> for the current month."},
     "report_custom_topn_prompt": {"uk": "✏️ Напиши число — скільки категорій показати (наприклад <code>7</code>):", "en": "✏️ Write a number — how many categories to show (e.g. <code>7</code>):"},
     "int_over_zero_prompt": {"uk": "❌ <b>Напиши ціле число більше 0</b>, наприклад <code>7</code>.", "en": "❌ <b>Write a whole number greater than 0</b>, e.g. <code>7</code>."},

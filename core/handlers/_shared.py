@@ -1,0 +1,188 @@
+"""
+Shared router instance, in-memory state, and small helper functions used
+by every handlers submodule. Kept separate from the submodules to avoid
+circular imports: each submodule does `from core.handlers._shared
+import router, ...` and registers its handlers on that same router
+instance, which core/handlers/__init__.py then re-exports as a whole.
+"""
+import os
+import uuid
+from collections import OrderedDict
+from datetime import datetime, timedelta
+from aiogram import Router
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv
+from core.i18n import t
+
+# Load .env here explicitly rather than relying on import order: this
+# module reads ALLOWED_USER_ID at import time below, and it must not
+# depend on some other module (e.g. core.sheets) happening to import
+# — and call load_dotenv() — first. python-dotenv's load_dotenv() is
+# a no-op if called more than once, so this is safe alongside the
+# load_dotenv() calls in core/bot.py and core/sheets.py.
+load_dotenv()
+
+router = Router()
+
+# Fetch the raw ID string from env, split it by comma and strip any whitespace
+ALLOWED_IDS_RAW = os.getenv("ALLOWED_USER_ID", "")
+ALLOWED_IDS = [str(uid).strip() for uid in ALLOWED_IDS_RAW.split(",") if uid.strip()]
+
+
+def is_owner(user_id: int) -> bool:
+    """Helper function to verify if the user's ID exists within the allowed list."""
+    return str(user_id) in ALLOWED_IDS
+
+
+def _format_transaction(row) -> tuple[str, str, str, str, str]:
+    """Pad a raw sheet row to exactly 5 columns and return them."""
+    padded = row + ["-"] * (5 - len(row))
+    return tuple(padded[:5])
+
+# Holds parsed-but-unconfirmed transactions, keyed by a short random id
+# referenced from the inline confirm/cancel buttons' callback_data.
+# Capped so a burst of unconfirmed messages can't grow this unbounded —
+# this is a single-user bot, so a small cap is plenty.
+_PENDING_ENTRIES_MAX = 50
+pending_entries: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _store_pending_entry(entry: dict) -> str:
+    entry_id = uuid.uuid4().hex[:8]
+    pending_entries[entry_id] = entry
+    while len(pending_entries) > _PENDING_ENTRIES_MAX:
+        pending_entries.popitem(last=False)  # drop oldest
+    return entry_id
+
+# Holds parsed-but-unconfirmed *batches* of transactions (multi-line
+# input), keyed the same way as pending_entries but each value is a
+# list of entry dicts instead of a single one.
+_PENDING_BATCHES_MAX = 20
+pending_batches: "OrderedDict[str, list]" = OrderedDict()
+
+
+def _store_pending_batch(entries: list) -> str:
+    batch_id = uuid.uuid4().hex[:8]
+    pending_batches[batch_id] = entries
+    while len(pending_batches) > _PENDING_BATCHES_MAX:
+        pending_batches.popitem(last=False)
+    return batch_id
+
+# Remembers how many rows the most recent successful save added for each
+# user (1 for a normal confirm, N for a multi-entry batch confirm), so
+# /undo can remove the whole batch as one unit instead of just one row.
+_last_action_count: dict = {}
+
+# Tracks users who are mid-flow entering a custom category name for a
+# pending entry: user_id -> entry_id. The next free-text message from
+# that user is treated as the new category, not a new transaction.
+awaiting_category_text: dict = {}
+
+# Tracks users who tapped "✏️ Свій варіант" under the /report period
+# picker: their next free-text message is parsed as report arguments
+# instead of a new transaction.
+awaiting_report_args: dict = {}
+
+# Maps a period-picker button choice to the equivalent /report arguments.
+PERIOD_ARGS_MAP = {
+    "today": ["today"], "week": ["week"], "month": [],
+    "2month": ["2month"], "year": ["year"],
+}
+
+# Tracks users who tapped "✏️ Своє число" under the category-count step:
+# user_id -> the period choice they already picked. Their next free-text
+# message is parsed as the top-N number to combine with that period.
+awaiting_report_topn: dict = {}
+
+# Tracks users mid-flow setting a budget: user_id -> category, once a
+# category is picked (or typed), waiting for the amount as free text.
+awaiting_budget_amount: dict = {}
+
+# Tracks users who tapped "✏️ Своя категорія" under /budget's add flow:
+# their next free-text message is the category name, not a transaction.
+awaiting_budget_category: dict = {}
+
+# Tracks users who tapped "➕ Додати час" under /remind: their next
+# free-text message is parsed as a HH:MM reminder time, not a transaction.
+awaiting_remind_time: dict = {}
+
+# Tracks users who tapped "✏️ Ввести текст" under /find: their next
+# free-text message is the search query, not a transaction.
+awaiting_find_query: dict = {}
+
+# Tracks recently *saved* transactions per user, to warn about likely
+# accidental duplicates (e.g. a double-tap or a flaky connection
+# resending the same message). Not a hard block — just a warning banner
+# on the confirmation preview; the user can still save it if it's real.
+DUPLICATE_WINDOW_SECONDS = 120
+recent_entries: dict = {}
+
+
+def _quick_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
+    """
+    A compact inline keyboard for the no-argument commands, attached to
+    key responses so the person can tap through the bot without typing
+    "/" commands manually. Unlike a persistent reply keyboard, this
+    doesn't permanently occupy screen space — it's attached to a single
+    message and scrolls away naturally.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("btn_last", lang), callback_data="nav:last"),
+            InlineKeyboardButton(text=t("btn_undo", lang), callback_data="nav:undo"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_report", lang), callback_data="nav:report"),
+            InlineKeyboardButton(text=t("btn_budget", lang), callback_data="nav:budget"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_find", lang), callback_data="nav:find"),
+            InlineKeyboardButton(text=t("btn_remind", lang), callback_data="nav:remind"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_export", lang), callback_data="nav:export"),
+            InlineKeyboardButton(text=t("btn_language", lang), callback_data="nav:language"),
+        ],
+    ])
+
+
+def _record_recent_entry(user_id: int, type_tr: str, category: str, amount: float) -> None:
+    now = datetime.now()
+    entries = recent_entries.setdefault(user_id, [])
+    entries.append((now, type_tr, category, amount))
+    cutoff = now - timedelta(seconds=DUPLICATE_WINDOW_SECONDS)
+    recent_entries[user_id] = [e for e in entries if e[0] >= cutoff]
+
+
+def _is_likely_duplicate(user_id: int, type_tr: str, category: str, amount: float) -> bool:
+    cutoff = datetime.now() - timedelta(seconds=DUPLICATE_WINDOW_SECONDS)
+    return any(
+        ts >= cutoff and t == type_tr and c == category and a == amount
+        for ts, t, c, a in recent_entries.get(user_id, [])
+    )
+
+
+def _build_preview_text(entry: dict, lang: str = "uk") -> str:
+    icon = "💰" if entry["type_tr"] == "Income" else "📉"
+    type_label = t("type_income", lang) if entry["type_tr"] == "Income" else t("type_expense", lang)
+    warning = (t("duplicate_warning", lang) + "\n\n") if entry.get("is_duplicate") else ""
+    return (
+        f"{warning}{t('preview_check_title', lang)}\n\n"
+        f"{t('label_date', lang)} {entry['date']}\n"
+        f"{icon} {t('label_type', lang)} {type_label}\n"
+        f"{t('label_category', lang)} {entry['category']}\n"
+        f"{t('label_amount', lang)} {entry['amount']} грн\n"
+        f"{t('label_description', lang)} {entry['description']}"
+    )
+
+
+def _build_preview_keyboard(entry_id: str, lang: str = "uk") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("btn_save", lang), callback_data=f"entry_confirm:{entry_id}"),
+            InlineKeyboardButton(text=t("btn_cancel", lang), callback_data=f"entry_cancel:{entry_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_edit_category", lang), callback_data=f"entry_edit_cat:{entry_id}"),
+        ],
+    ])
