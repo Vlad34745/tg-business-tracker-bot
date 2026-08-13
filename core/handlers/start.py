@@ -6,6 +6,7 @@ from aiogram.types import (
 )
 from aiogram.filters import CommandStart, Command
 from core import language
+from core import access
 from core.i18n import t
 from core.handlers._shared import router, is_owner, _quick_menu_keyboard
 
@@ -14,8 +15,14 @@ async def cmd_start(message: Message):
     lang = language.get_language(message.from_user.id)
 
     if not is_owner(message.from_user.id):
-        await message.answer(t("access_denied_start", lang))
-        return
+        # First time seeing this user — self-register them instead of
+        # denying access, so /start "just works" without needing their
+        # Telegram ID hand-added to ALLOWED_USER_ID. Per-user Sheet tab
+        # isolation (core/sheets.py) means this never exposes anyone
+        # else's data — a self-registered user only ever reads/writes
+        # their own tab.
+        access.register(message.from_user.id)
+        await language.apply_commands_for_chat(message.bot, message.from_user.id)
 
     if lang == "en":
         welcome_text = (

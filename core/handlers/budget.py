@@ -15,7 +15,7 @@ from core.handlers._shared import (
 async def _show_budget_view(user_id: int, answer):
     lang = language.get_language(user_id)
     try:
-        budgets = parse_budgets_rows(await get_budgets())
+        budgets = parse_budgets_rows(await get_budgets(user_id))
     except Exception as e:
         await answer(t("err_sheet_read", lang, e=e))
         return
@@ -25,7 +25,7 @@ async def _show_budget_view(user_id: int, answer):
         return
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(user_id)
     except Exception as e:
         await answer(t("err_sheet_read", lang, e=e))
         return
@@ -75,7 +75,7 @@ async def cmd_budget(message: Message):
             return
 
         try:
-            await set_budget(category, limit)
+            await set_budget(message.from_user.id, category, limit)
         except Exception as e:
             await message.answer(t("err_sheet_write", lang, e=e))
             return
@@ -90,7 +90,7 @@ async def cmd_budget(message: Message):
             return
         category = " ".join(args[1:]).strip()
         try:
-            deleted = await delete_budget(category)
+            deleted = await delete_budget(message.from_user.id, category)
         except Exception as e:
             await message.answer(t("err_delete", lang, e=e))
             return
@@ -127,7 +127,7 @@ async def cb_budget_add(callback: CallbackQuery):
     await callback.answer()
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(callback.from_user.id)
         top_categories = get_frequent_categories(rows, limit=6)
     except Exception:
         top_categories = []
@@ -172,7 +172,7 @@ async def cb_budget_remove(callback: CallbackQuery):
     await callback.answer()
 
     try:
-        budgets = parse_budgets_rows(await get_budgets())
+        budgets = parse_budgets_rows(await get_budgets(callback.from_user.id))
     except Exception as e:
         await callback.message.edit_text(t("err_sheet_read", lang, e=e))
         return
@@ -199,7 +199,7 @@ async def cb_budget_delete_category(callback: CallbackQuery):
 
     category = callback.data.split(":", 1)[1]
     try:
-        deleted = await delete_budget(category)
+        deleted = await delete_budget(callback.from_user.id, category)
     except Exception as e:
         await callback.message.edit_text(t("err_delete", lang, e=e))
         await callback.answer()

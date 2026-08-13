@@ -41,7 +41,7 @@ async def cmd_last(message: Message):
         return
 
     try:
-        row = await get_last_transaction()
+        row = await get_last_transaction(message.from_user.id)
     except Exception as e:
         await message.answer(t("err_sheet_read", lang, e=e))
         return
@@ -78,7 +78,7 @@ async def cmd_undo(message: Message):
         # The most recent save was a multi-entry batch — offer to undo
         # the whole batch as one unit instead of just the last row.
         try:
-            rows = await get_last_n_transactions(last_count)
+            rows = await get_last_n_transactions(user_id, last_count)
         except Exception as e:
             await message.answer(t("err_sheet_read", lang, e=e))
             return
@@ -108,7 +108,7 @@ async def cmd_undo(message: Message):
         return
 
     try:
-        row = await get_last_transaction()
+        row = await get_last_transaction(message.from_user.id)
     except Exception as e:
         await message.answer(t("err_sheet_read", lang, e=e))
         return
@@ -145,7 +145,7 @@ async def cb_undo_batch_confirm(callback: CallbackQuery):
 
     n = int(callback.data.split(":", 1)[1])
     try:
-        deleted_rows = await delete_last_n_transactions(n)
+        deleted_rows = await delete_last_n_transactions(callback.from_user.id, n)
     except Exception as e:
         await callback.message.edit_text(t("err_delete", lang, e=e))
         await callback.answer()
@@ -171,7 +171,7 @@ async def cb_undo_confirm(callback: CallbackQuery):
         return
 
     try:
-        deleted_row = await delete_last_transaction()
+        deleted_row = await delete_last_transaction(callback.from_user.id)
     except Exception as e:
         await callback.message.edit_text(t("err_delete", lang, e=e))
         await callback.answer()
@@ -207,7 +207,7 @@ async def cb_entry_confirm(callback: CallbackQuery):
 
     try:
         transaction_data = {k: v for k, v in entry.items() if k != "is_duplicate"}
-        await append_transaction(**transaction_data)
+        await append_transaction(callback.from_user.id, **transaction_data)
         _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
         _last_action_count[callback.from_user.id] = 1
         icon = "💰" if entry["type_tr"] == "Income" else "📉"
@@ -247,7 +247,7 @@ async def cb_entry_edit_category(callback: CallbackQuery):
         return
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(callback.from_user.id)
         top_categories = get_frequent_categories(rows, limit=6)
     except Exception:
         top_categories = []  # fall back to just the custom-input option
@@ -341,6 +341,7 @@ async def cb_batch_confirm(callback: CallbackQuery):
     for entry in entries:
         try:
             await append_transaction(
+                callback.from_user.id,
                 date=entry["date"], type_tr=entry["type_tr"], category=entry["category"],
                 amount=entry["amount"], description=entry["description"]
             )
@@ -377,7 +378,7 @@ async def cb_nav_last(callback: CallbackQuery):
     await callback.answer()
 
     try:
-        row = await get_last_transaction()
+        row = await get_last_transaction(callback.from_user.id)
     except Exception as e:
         await callback.message.answer(t("err_sheet_read", lang, e=e))
         return
@@ -411,7 +412,7 @@ async def cb_nav_undo(callback: CallbackQuery):
 
     if last_count > 1:
         try:
-            rows = await get_last_n_transactions(last_count)
+            rows = await get_last_n_transactions(user_id, last_count)
         except Exception as e:
             await callback.message.answer(t("err_sheet_read", lang, e=e))
             return
@@ -439,7 +440,7 @@ async def cb_nav_undo(callback: CallbackQuery):
         return
 
     try:
-        row = await get_last_transaction()
+        row = await get_last_transaction(callback.from_user.id)
     except Exception as e:
         await callback.message.answer(t("err_sheet_read", lang, e=e))
         return
@@ -538,7 +539,7 @@ async def handle_financial_entry(message: Message):
             await message.answer(t("positive_number_prompt", lang))
             return
         try:
-            await set_budget(category, limit)
+            await set_budget(user_id, category, limit)
         except Exception as e:
             await message.answer(t("err_sheet_write", lang, e=e))
             return

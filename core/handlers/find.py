@@ -12,7 +12,7 @@ from core.handlers._shared import router, is_owner, awaiting_find_query
 async def _run_find(user_id: int, query: str, answer):
     lang = language.get_language(user_id)
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(user_id)
     except Exception as e:
         await answer(t("err_sheet_read", lang, e=e))
         return
@@ -55,7 +55,7 @@ async def cmd_find(message: Message):
         # No query given — offer buttons for the most-used categories
         # instead of just erroring out.
         try:
-            rows = await get_all_transactions()
+            rows = await get_all_transactions(message.from_user.id)
             top_categories = get_frequent_categories(rows, limit=8)
         except Exception:
             top_categories = []
@@ -107,7 +107,7 @@ async def cb_nav_find(callback: CallbackQuery):
     await callback.answer()
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(callback.from_user.id)
         top_categories = get_frequent_categories(rows, limit=8)
     except Exception:
         top_categories = []

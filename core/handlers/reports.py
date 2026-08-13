@@ -87,7 +87,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
             custom_start = subtract_months(custom_end, n_months)
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(user_id)
     except Exception as e:
         await answer(t("err_sheet_read", lang, e=e))
         return
@@ -149,7 +149,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
 
     if is_month_mode:
         try:
-            budgets = parse_budgets_rows(await get_budgets())
+            budgets = parse_budgets_rows(await get_budgets(user_id))
         except Exception:
             budgets = {}
         overages = [

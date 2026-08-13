@@ -17,7 +17,7 @@ async def cmd_export(message: Message):
         return
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(message.from_user.id)
     except Exception as e:
         await message.answer(t("err_sheet_read", lang, e=e))
         return
@@ -45,7 +45,7 @@ async def cb_nav_export(callback: CallbackQuery):
     await callback.answer()
 
     try:
-        rows = await get_all_transactions()
+        rows = await get_all_transactions(callback.from_user.id)
     except Exception as e:
         await callback.message.answer(t("err_sheet_read", lang, e=e))
         return

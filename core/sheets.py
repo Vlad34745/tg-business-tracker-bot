@@ -14,30 +14,82 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 # API access scope for Google Sheets
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Per-user tab isolation: each allowed user gets their own
+# "Transactions_<id>" / "Budgets_<id>" tab so multiple people sharing
+# the bot don't see or accidentally delete each other's entries. The
+# first ID in ALLOWED_USER_ID is treated as the original owner and
+# keeps using the plain "Transactions"/"Budgets" tab names, so data
+# already in the sheet from before multi-user support stays right
+# where it is — no manual migration needed.
+ALLOWED_IDS_RAW = os.getenv("ALLOWED_USER_ID", "")
+ALLOWED_IDS = [str(uid).strip() for uid in ALLOWED_IDS_RAW.split(",") if uid.strip()]
+
+
+def _tab_name(base: str, user_id: int) -> str:
+    if ALLOWED_IDS and str(user_id) == ALLOWED_IDS[0]:
+        return base
+    return f"{base}_{user_id}"
+
+
 def _get_sheets_service():
     """Internal synchronous helper to initialize the Google Sheets API client."""
     if not os.path.exists(CREDENTIALS_PATH):
         raise FileNotFoundError(f"Google credentials file missing at: {CREDENTIALS_PATH}")
-    
+
     creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds)
 
-async def append_transaction(date: str, type_tr: str, category: str, amount: float, description: str):
+
+def _tab_exists(sheet, tab_name: str) -> bool:
+    metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
+    titles = [tab["properties"]["title"] for tab in metadata.get("sheets", [])]
+    return tab_name in titles
+
+
+def _get_sheet_id(sheet, tab_name: str):
+    """Returns the numeric sheetId for a tab, or None if it doesn't exist."""
+    metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
+    for tab in metadata.get("sheets", []):
+        if tab["properties"]["title"] == tab_name:
+            return tab["properties"]["sheetId"]
+    return None
+
+
+def _ensure_transactions_sheet_exists(sheet, tab_name: str):
     """
-    Asynchronously appends a transaction row into the Google Sheet.
+    Creates a transactions tab with a header row if it doesn't exist
+    yet. Called lazily from append_transaction — a brand new user's
+    tab isn't created until their first saved entry.
+    """
+    if _tab_exists(sheet, tab_name):
+        return
+
+    sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
+        "requests": [{"addSheet": {"properties": {"title": tab_name}}}]
+    }).execute()
+    sheet.values().update(
+        spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A1:E1",
+        valueInputOption="USER_ENTERED",
+        body={"values": [["Date", "Type", "Category", "Amount", "Description"]]}
+    ).execute()
+
+
+async def append_transaction(user_id: int, date: str, type_tr: str, category: str, amount: float, description: str):
+    """
+    Asynchronously appends a transaction row into this user's
+    Transactions tab (creating the tab on first use).
     Uses asyncio.to_thread to prevent API requests from blocking the bot's main loop.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
-        
-        # Prepare the row values for inserting
+        tab_name = _tab_name("Transactions", user_id)
+        _ensure_transactions_sheet_exists(sheet, tab_name)
+
         row_values = [[date, type_tr, category, amount, description]]
         body = {"values": row_values}
-        
-        # Target sheet tab name and column range
-        range_name = "Transactions!A:E"
-        
+        range_name = f"{tab_name}!A:E"
+
         request = sheet.values().append(
             spreadsheetId=SPREADSHEET_ID,
             range=range_name,
@@ -51,27 +103,33 @@ async def append_transaction(date: str, type_tr: str, category: str, amount: flo
     return await asyncio.to_thread(sync_worker)
 
 
-async def get_last_transaction():
+async def get_last_transaction(user_id: int):
     """
     Asynchronously fetches the most recently added transaction row
-    from the Google Sheet.
+    from this user's Transactions tab.
 
     Returns:
         A list [date, type_tr, category, amount, description] for the
-        last row, or None if the sheet has no data rows yet.
+        last row, or None if the tab has no data rows yet (or doesn't
+        exist yet because this user hasn't saved anything).
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
 
-        range_name = "Transactions!A:E"
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=range_name,
-            valueRenderOption="UNFORMATTED_VALUE",
-            dateTimeRenderOption="FORMATTED_STRING"
-        ).execute()
-        return result.get("values", [])
+        try:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A:E",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"
+            ).execute()
+            return result.get("values", [])
+        except HttpError as e:
+            if e.resp.status == 400:
+                return []  # tab doesn't exist yet — no entries for this user
+            raise
 
     rows = await asyncio.to_thread(sync_worker)
     if not rows:
@@ -80,33 +138,27 @@ async def get_last_transaction():
     return rows[-1]
 
 
-async def delete_last_transaction():
+async def delete_last_transaction(user_id: int):
     """
-    Asynchronously deletes the last row from the Transactions sheet.
+    Asynchronously deletes the last row from this user's Transactions
+    tab.
 
     Returns:
-        The deleted row's data as a list, or None if the sheet had no
+        The deleted row's data as a list, or None if the tab had no
         data rows to delete.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
 
-        # Find the numeric sheetId for the "Transactions" tab —
-        # required by the batchUpdate deleteDimension request below.
-        metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
-        sheet_id = None
-        for tab in metadata.get("sheets", []):
-            if tab["properties"]["title"] == "Transactions":
-                sheet_id = tab["properties"]["sheetId"]
-                break
+        sheet_id = _get_sheet_id(sheet, tab_name)
         if sheet_id is None:
-            raise ValueError("Sheet tab 'Transactions' not found in the spreadsheet.")
+            return None  # no tab yet — nothing to delete
 
-        range_name = "Transactions!A:E"
         result = sheet.values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range=range_name,
+            range=f"{tab_name}!A:E",
             valueRenderOption="UNFORMATTED_VALUE",
             dateTimeRenderOption="FORMATTED_STRING"
         ).execute()
@@ -138,54 +190,57 @@ async def delete_last_transaction():
     return await asyncio.to_thread(sync_worker)
 
 
-async def get_last_n_transactions(n: int = 1):
+async def get_last_n_transactions(user_id: int, n: int = 1):
     """
-    Fetches the last N rows from the Transactions sheet (most recent
-    last, same order as they appear in the sheet). Returns fewer than
-    N rows if the sheet has fewer than N rows total, or an empty list
-    if there's no data at all.
+    Fetches the last N rows from this user's Transactions tab (most
+    recent last, same order as they appear in the sheet). Returns
+    fewer than N rows if the tab has fewer than N rows total, or an
+    empty list if there's no data (or no tab) at all.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
 
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Transactions!A:E",
-            valueRenderOption="UNFORMATTED_VALUE",
-            dateTimeRenderOption="FORMATTED_STRING"
-        ).execute()
+        try:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A:E",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 400:
+                return []
+            raise
         rows = result.get("values", [])
         return rows[-n:] if rows else []
 
     return await asyncio.to_thread(sync_worker)
 
 
-async def delete_last_n_transactions(n: int = 1):
+async def delete_last_n_transactions(user_id: int, n: int = 1):
     """
-    Deletes the last N rows from the Transactions sheet in one batch
-    operation (used to undo a multi-entry save as a single unit).
+    Deletes the last N rows from this user's Transactions tab in one
+    batch operation (used to undo a multi-entry save as a single
+    unit).
 
     Returns:
         The deleted rows' data (list of lists), or an empty list if
-        the sheet had no data rows to delete.
+        the tab had no data rows to delete.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
 
-        metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
-        sheet_id = None
-        for tab in metadata.get("sheets", []):
-            if tab["properties"]["title"] == "Transactions":
-                sheet_id = tab["properties"]["sheetId"]
-                break
+        sheet_id = _get_sheet_id(sheet, tab_name)
         if sheet_id is None:
-            raise ValueError("Sheet tab 'Transactions' not found in the spreadsheet.")
+            return []
 
         result = sheet.values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range="Transactions!A:E",
+            range=f"{tab_name}!A:E",
             valueRenderOption="UNFORMATTED_VALUE",
             dateTimeRenderOption="FORMATTED_STRING"
         ).execute()
@@ -215,65 +270,69 @@ async def delete_last_n_transactions(n: int = 1):
     return await asyncio.to_thread(sync_worker)
 
 
-async def get_all_transactions():
+async def get_all_transactions(user_id: int):
     """
-    Asynchronously fetches every transaction row from the sheet.
+    Asynchronously fetches every transaction row from this user's tab.
     Used for aggregation features (e.g. the monthly /report command).
 
     Returns:
         A list of rows, each [date, type_tr, category, amount, description].
-        Empty list if the sheet has no data yet.
+        Empty list if the tab has no data (or doesn't exist) yet.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
 
-        range_name = "Transactions!A:E"
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=range_name,
-            valueRenderOption="UNFORMATTED_VALUE",
-            dateTimeRenderOption="FORMATTED_STRING"
-        ).execute()
-        return result.get("values", [])
+        try:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A:E",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"
+            ).execute()
+            return result.get("values", [])
+        except HttpError as e:
+            if e.resp.status == 400:
+                return []
+            raise
 
     return await asyncio.to_thread(sync_worker)
 
 
-def _ensure_budgets_sheet_exists(sheet):
+def _ensure_budgets_sheet_exists(sheet, tab_name: str):
     """
-    Creates the "Budgets" tab with a header row if it doesn't exist yet.
+    Creates a budgets tab with a header row if it doesn't exist yet.
     Called lazily from set_budget — the tab isn't needed until someone
     actually sets their first limit.
     """
-    metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
-    titles = [tab["properties"]["title"] for tab in metadata.get("sheets", [])]
-    if "Budgets" in titles:
+    if _tab_exists(sheet, tab_name):
         return
 
     sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
-        "requests": [{"addSheet": {"properties": {"title": "Budgets"}}}]
+        "requests": [{"addSheet": {"properties": {"title": tab_name}}}]
     }).execute()
     sheet.values().update(
-        spreadsheetId=SPREADSHEET_ID, range="Budgets!A1:B1",
+        spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A1:B1",
         valueInputOption="USER_ENTERED",
         body={"values": [["Category", "MonthlyLimit"]]}
     ).execute()
 
 
-async def get_budgets():
+async def get_budgets(user_id: int):
     """
-    Fetches all configured budget rows [category, limit] from the
-    "Budgets" tab. Returns an empty list if the tab doesn't exist yet
-    (i.e. no budgets have been set) instead of raising.
+    Fetches all configured budget rows [category, limit] from this
+    user's Budgets tab. Returns an empty list if the tab doesn't
+    exist yet (i.e. no budgets have been set) instead of raising.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Budgets", user_id)
         try:
             result = sheet.values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range="Budgets!A2:B",  # skip the header row
+                range=f"{tab_name}!A2:B",  # skip the header row
                 valueRenderOption="UNFORMATTED_VALUE"
             ).execute()
             return result.get("values", [])
@@ -286,18 +345,19 @@ async def get_budgets():
     return await asyncio.to_thread(sync_worker)
 
 
-async def set_budget(category: str, limit: float):
+async def set_budget(user_id: int, category: str, limit: float):
     """
-    Creates or updates the monthly limit for a category in the
-    "Budgets" tab (creating the tab itself on first use).
+    Creates or updates the monthly limit for a category in this
+    user's Budgets tab (creating the tab itself on first use).
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
-        _ensure_budgets_sheet_exists(sheet)
+        tab_name = _tab_name("Budgets", user_id)
+        _ensure_budgets_sheet_exists(sheet, tab_name)
 
         existing = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID, range="Budgets!A2:A"
+            spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A2:A"
         ).execute().get("values", [])
 
         row_number = None
@@ -309,13 +369,13 @@ async def set_budget(category: str, limit: float):
         if row_number:
             sheet.values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"Budgets!A{row_number}:B{row_number}",
+                range=f"{tab_name}!A{row_number}:B{row_number}",
                 valueInputOption="USER_ENTERED",
                 body={"values": [[category, limit]]}
             ).execute()
         else:
             sheet.values().append(
-                spreadsheetId=SPREADSHEET_ID, range="Budgets!A:B",
+                spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:B",
                 valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
                 body={"values": [[category, limit]]}
             ).execute()
@@ -323,26 +383,23 @@ async def set_budget(category: str, limit: float):
     return await asyncio.to_thread(sync_worker)
 
 
-async def delete_budget(category: str) -> bool:
+async def delete_budget(user_id: int, category: str) -> bool:
     """
-    Removes a category's budget row. Returns True if a row was found
-    and deleted, False if there was no budget set for that category.
+    Removes a category's budget row from this user's Budgets tab.
+    Returns True if a row was found and deleted, False if there was
+    no budget set for that category.
     """
     def sync_worker():
         service = _get_sheets_service()
         sheet = service.spreadsheets()
+        tab_name = _tab_name("Budgets", user_id)
 
-        metadata = sheet.get(spreadsheetId=SPREADSHEET_ID).execute()
-        sheet_id = None
-        for tab in metadata.get("sheets", []):
-            if tab["properties"]["title"] == "Budgets":
-                sheet_id = tab["properties"]["sheetId"]
-                break
+        sheet_id = _get_sheet_id(sheet, tab_name)
         if sheet_id is None:
-            return False  # no Budgets tab at all yet
+            return False  # no Budgets tab at all yet for this user
 
         existing = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID, range="Budgets!A2:A"
+            spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A2:A"
         ).execute().get("values", [])
 
         row_number = None

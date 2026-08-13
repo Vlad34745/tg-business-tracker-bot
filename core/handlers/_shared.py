@@ -13,6 +13,7 @@ from aiogram import Router
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 from core.i18n import t
+from core import access
 
 # Load .env here explicitly rather than relying on import order: this
 # module reads ALLOWED_USER_ID at import time below, and it must not
@@ -30,8 +31,12 @@ ALLOWED_IDS = [str(uid).strip() for uid in ALLOWED_IDS_RAW.split(",") if uid.str
 
 
 def is_owner(user_id: int) -> bool:
-    """Helper function to verify if the user's ID exists within the allowed list."""
-    return str(user_id) in ALLOWED_IDS
+    """
+    True if this user is allowed to use the bot: either their ID is in
+    the static ALLOWED_USER_ID env list, or they've self-registered by
+    pressing /start (see core/access.py and cmd_start in start.py).
+    """
+    return str(user_id) in ALLOWED_IDS or access.is_registered(user_id)
 
 
 def _format_transaction(row) -> tuple[str, str, str, str, str]:
