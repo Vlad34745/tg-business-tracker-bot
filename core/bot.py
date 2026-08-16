@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from core.handlers import router as main_router, ALLOWED_IDS
 from core.reminder import reminder_loop
 from core import language
+from core import access
 
 load_dotenv()
 
@@ -50,19 +51,25 @@ async def main():
     # saved /language preference gets a per-chat override via
     # BotCommandScopeChat, so the menu matches their bot-language
     # choice rather than their Telegram client's own language — this
-    # also re-applies the override after a bot restart.
+    # also re-applies the override after a bot restart. Includes both
+    # the static ALLOWED_USER_ID list and anyone who self-registered
+    # via /start in a previous run.
     await bot.set_my_commands(language.COMMANDS_UK)
-    for user_id_str in ALLOWED_IDS:
+    all_configured_ids = list(dict.fromkeys(ALLOWED_IDS + list(access.all_ids())))
+    for user_id_str in all_configured_ids:
         try:
             await language.apply_commands_for_chat(bot, int(user_id_str))
         except ValueError:
             continue
 
-    # Background task: sends a daily reminder to log expenses if enabled
-    if ALLOWED_IDS:
-        asyncio.create_task(reminder_loop(bot, ALLOWED_IDS))
-    else:
-        logger.warning("ALLOWED_USER_ID not set — daily reminder task not started.")
+    # Background task: sends a daily reminder to log expenses if enabled.
+    # get_user_ids is re-evaluated on every reminder cycle rather than
+    # captured once here, so users who self-register via /start after
+    # the bot has started still receive reminders without a restart.
+    def _get_reminder_user_ids():
+        return list(dict.fromkeys(ALLOWED_IDS + list(access.all_ids())))
+
+    asyncio.create_task(reminder_loop(bot, _get_reminder_user_ids))
 
     logger.info("Bot is starting up... Beginning long polling.")
     

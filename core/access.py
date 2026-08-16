@@ -67,5 +67,10 @@ def count() -> int:
     return len(_auto_users)
 
 
+def all_ids() -> set:
+    """All self-registered (auto) user IDs, as strings."""
+    return set(_auto_users)
+
+
 def is_registered(user_id: int) -> bool:
     return str(user_id) in _auto_users

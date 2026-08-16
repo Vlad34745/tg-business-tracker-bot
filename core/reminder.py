@@ -95,13 +95,31 @@ def remove_time(time_str: str) -> bool:
     return True
 
 
-async def reminder_loop(bot, user_ids: list):
+async def _send_one_reminder(bot, user_id: str) -> None:
+    try:
+        lang = language.get_language(int(user_id))
+        await bot.send_message(
+            int(user_id),
+            t("daily_reminder_text", lang),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send reminder to {user_id}: {e}")
+
+
+async def reminder_loop(bot, get_user_ids):
     """
     Background task: sleeps until the next occurrence of any configured
     reminder time (local time) and, if reminders are enabled, sends a
-    "log your expenses" nudge to every allowed user. Supports multiple
+    "log your expenses" nudge to every current user. Supports multiple
     times per day — re-reads the configured times on every cycle, so
     changes made via /remind take effect without a bot restart.
+
+    `get_user_ids` is a zero-arg callable returning the current list of
+    user IDs (rather than a fixed list captured at startup), since new
+    users can self-register via /start at any time — see core/access.py.
+    Sends go out concurrently rather than one-by-one, so a slow or
+    failing send to one user doesn't delay everyone else's reminder.
     """
     while True:
         now = datetime.now()
@@ -119,16 +137,9 @@ async def reminder_loop(bot, user_ids: list):
         await asyncio.sleep((next_target - now).total_seconds())
 
         if is_enabled():
-            for user_id in user_ids:
-                try:
-                    lang = language.get_language(int(user_id))
-                    await bot.send_message(
-                        int(user_id),
-                        t("daily_reminder_text", lang),
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to send reminder to {user_id}: {e}")
+            user_ids = get_user_ids()
+            if user_ids:
+                await asyncio.gather(*(_send_one_reminder(bot, uid) for uid in user_ids))
 
         # Avoid re-triggering within the same minute due to loop timing.
         await asyncio.sleep(60)
