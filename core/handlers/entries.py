@@ -9,7 +9,7 @@ from datetime import datetime
 from aiogram import F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
-from core.validator import parse_financial_message, parse_multiline_message, dedupe_description
+from core.validator import parse_financial_message, parse_multiline_message, dedupe_description, normalize_category
 from core.report import get_frequent_categories
 from core import reminder
 from core import language
@@ -521,7 +521,7 @@ async def handle_financial_entry(message: Message):
     if user_id in awaiting_budget_category:
         awaiting_budget_category.pop(user_id)
         category_raw = message.text.strip()
-        category = category_raw[0].upper() + category_raw[1:] if category_raw else category_raw
+        category = normalize_category(category_raw)
         if not category:
             await message.answer(t("category_empty", lang))
             return
@@ -556,7 +556,7 @@ async def handle_financial_entry(message: Message):
         new_category = message.text.strip()
         if new_category:
             entry["description"] = dedupe_description(entry["description"], new_category)
-            entry["category"] = new_category[0].upper() + new_category[1:]
+            entry["category"] = normalize_category(new_category)
 
         await message.answer(
             _build_preview_text(entry, lang),

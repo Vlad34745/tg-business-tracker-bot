@@ -8,7 +8,7 @@ from aiogram.filters import CommandStart, Command
 from core import language
 from core import access
 from core.i18n import t
-from core.handlers._shared import router, is_owner, _quick_menu_keyboard
+from core.handlers._shared import router, is_owner, ALLOWED_IDS, _quick_menu_keyboard
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -108,3 +108,20 @@ async def cb_nav_language(callback: CallbackQuery):
         InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_set:en"),
     ]])
     await callback.message.answer(t("language_prompt", lang), reply_markup=keyboard)
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    lang = language.get_language(message.from_user.id)
+    # Admin-only: restricted to IDs configured in ALLOWED_USER_ID, not
+    # to anyone who self-registered via /start — this is meant for the
+    # bot owner to see how many people are actually using it.
+    if str(message.from_user.id) not in ALLOWED_IDS:
+        await message.answer(t("access_denied", lang))
+        return
+
+    static_count = len(ALLOWED_IDS)
+    auto_count = access.count()
+    await message.answer(t(
+        "stats_text", lang,
+        static=static_count, auto=auto_count, total=static_count + auto_count
+    ))

@@ -5,6 +5,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from core.report import compute_monthly_report, format_month_label, get_frequent_categories
 from core.budget import parse_budgets_rows
+from core.validator import normalize_category
 from core import language
 from core.i18n import t
 from core.sheets import get_all_transactions, get_budgets, set_budget, delete_budget
@@ -65,7 +66,7 @@ async def cmd_budget(message: Message):
             await message.answer(t("budget_format_set", lang))
             return
         category_raw = " ".join(args[1:-1]).strip()
-        category = category_raw[0].upper() + category_raw[1:] if category_raw else category_raw
+        category = normalize_category(category_raw)
         try:
             limit = float(args[-1].replace(",", "."))
             if limit <= 0:

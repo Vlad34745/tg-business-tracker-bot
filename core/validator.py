@@ -27,6 +27,29 @@ def _capitalize_first(word: str) -> str:
     return word[0].upper() + word[1:]
 
 
+def normalize_category(category: str) -> str:
+    """
+    Canonicalizes a category name so the same category typed different
+    ways is always stored — and therefore grouped in reports and
+    matched in budgets — as one and the same category. Without this,
+    "Кафе", "кафе", " Кафе", and "Кафе  " would each become a distinct
+    category in reports.
+
+    Trims leading/trailing whitespace, collapses repeated internal
+    whitespace to a single space, and capitalizes only the first
+    letter (leaving the rest untouched — see _capitalize_first).
+
+    This is the single place category text gets canonicalized; every
+    code path that sets a category (parsed from a message, typed as a
+    custom category, or typed for a budget limit) should route through
+    this function before the category is stored or compared.
+    """
+    if not category:
+        return category
+    collapsed = " ".join(category.split())  # trim + collapse whitespace
+    return _capitalize_first(collapsed)
+
+
 def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
     """
     Parses the user's financial text message splitting it by the position of the amount.
@@ -60,16 +83,16 @@ def parse_financial_message(text: str) -> Optional[Tuple[str, str, float, str]]:
     # Determine Category and Description based on the message layout structure
     if before_text and after_text:
         # Format: "Поповнення рахунку 250 Київстар"
-        category = _capitalize_first(before_text)
+        category = normalize_category(before_text)
         description = after_text
     elif before_text and not after_text:
         # Format: "Зубний 4100" or "Продукти АТБ 450"
-        category = _capitalize_first(before_text)
+        category = normalize_category(before_text)
         description = "-"
     elif after_text and not before_text:
         # Format: "500 Продукти АТБ"
         words = after_text.split()
-        category = _capitalize_first(words[0])
+        category = normalize_category(words[0])
         description = " ".join(words[1:]) if len(words) > 1 else "-"
     else:
         # If only a number was sent: "500"

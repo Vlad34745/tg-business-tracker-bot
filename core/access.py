@@ -62,5 +62,10 @@ def register(user_id: int) -> bool:
     return True
 
 
+def count() -> int:
+    """Number of self-registered (auto) users."""
+    return len(_auto_users)
+
+
 def is_registered(user_id: int) -> bool:
     return str(user_id) in _auto_users

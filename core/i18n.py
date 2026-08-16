@@ -7,6 +7,10 @@ TRANSLATIONS = {
         "uk": "🔒 Доступ обмежено. Цей бот є приватним фінансовим трекером.",
         "en": "🔒 Access restricted. This bot is a private finance tracker.",
     },
+    "stats_text": {
+        "uk": "📈 <b>Статистика бота</b>\n\n👤 У списку .env: {static}\n🆕 Самореєстрація: {auto}\n\n<b>Всього користувачів: {total}</b>",
+        "en": "📈 <b>Bot stats</b>\n\n👤 In .env allowlist: {static}\n🆕 Self-registered: {auto}\n\n<b>Total users: {total}</b>",
+    },
     "language_prompt": {
         "uk": "🌐 Обери мову:",
         "en": "🌐 Choose your language:",
