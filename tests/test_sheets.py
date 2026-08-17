@@ -155,6 +155,11 @@ def mock_sheets_service(monkeypatch):
     from unittest.mock import MagicMock
     mock_service = MagicMock()
     monkeypatch.setattr(sheets, "_service_cache", mock_service)
+    # _known_existing_tabs is a process-lifetime cache in real usage,
+    # but tests must not leak state into each other — a tab confirmed
+    # "existing" in one test must not silently skip the metadata check
+    # in the next test's assertions.
+    monkeypatch.setattr(sheets, "_known_existing_tabs", set())
     return mock_service
 
 
@@ -300,3 +305,69 @@ async def test_delete_transaction_row_returns_false_when_tab_missing(mock_sheets
     mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {"sheets": []}
     result = await sheets.delete_transaction_row(111, 2)
     assert result is False
+
+
+# --- append_transactions_batch ---
+
+@pytest.mark.asyncio
+async def test_append_transactions_batch_makes_a_single_api_call(mock_sheets_service):
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [{"properties": {"title": "Transactions", "sheetId": 1}}]
+    }
+    entries = [
+        {"date": "01.08.2026", "type_tr": "Expense", "category": "Кафе", "amount": 100, "description": "-"},
+        {"date": "01.08.2026", "type_tr": "Expense", "category": "Таксі", "amount": 50, "description": "-"},
+        {"date": "01.08.2026", "type_tr": "Income", "category": "Зарплата", "amount": 20000, "description": "-"},
+    ]
+
+    await sheets.append_transactions_batch(111, entries)
+
+    append_calls = mock_sheets_service.spreadsheets.return_value.values.return_value.append.call_args_list
+    assert len(append_calls) == 1  # one API call, not one per entry
+    assert append_calls[0].kwargs["body"]["values"] == [
+        ["01.08.2026", "Expense", "Кафе", 100, "-"],
+        ["01.08.2026", "Expense", "Таксі", 50, "-"],
+        ["01.08.2026", "Income", "Зарплата", 20000, "-"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_append_transactions_batch_creates_tab_if_missing(mock_sheets_service):
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {"sheets": []}
+    entries = [{"date": "01.08.2026", "type_tr": "Expense", "category": "Кафе", "amount": 100, "description": "-"}]
+
+    await sheets.append_transactions_batch(111, entries)
+
+    create_call = mock_sheets_service.spreadsheets.return_value.batchUpdate.call_args
+    assert create_call.kwargs["body"]["requests"][0]["addSheet"]["properties"]["title"] == "Transactions"
+
+
+# --- _known_existing_tabs cache ---
+
+@pytest.mark.asyncio
+async def test_tab_exists_metadata_checked_once_across_multiple_appends(mock_sheets_service):
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [{"properties": {"title": "Transactions", "sheetId": 1}}]
+    }
+
+    for i in range(5):
+        await sheets.append_transaction(111, f"0{i + 1}.08.2026", "Expense", "Cat", 10, "-")
+
+    metadata_calls = mock_sheets_service.spreadsheets.return_value.get.call_args_list
+    assert len(metadata_calls) == 1  # cached after the first call, not re-checked for the other 4
+
+
+@pytest.mark.asyncio
+async def test_tab_exists_cache_is_per_tab_name(mock_sheets_service):
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [
+            {"properties": {"title": "Transactions", "sheetId": 1}},
+            {"properties": {"title": "Transactions_222", "sheetId": 2}},
+        ]
+    }
+
+    await sheets.append_transaction(111, "01.08.2026", "Expense", "Cat", 10, "-")  # owner -> "Transactions"
+    await sheets.append_transaction(222, "01.08.2026", "Expense", "Cat", 10, "-")  # other user -> "Transactions_222"
+
+    metadata_calls = mock_sheets_service.spreadsheets.return_value.get.call_args_list
+    assert len(metadata_calls) == 2  # different tab names, each checked once

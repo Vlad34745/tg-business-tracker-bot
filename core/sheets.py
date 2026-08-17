@@ -74,6 +74,14 @@ def _tab_name(base: str, user_id: int) -> str:
 
 _service_cache = None
 
+# Tabs we've already confirmed exist (or just created) in this process,
+# so _ensure_*_sheet_exists doesn't re-fetch spreadsheet metadata on
+# every single append — that extra round trip per call was one of the
+# two reasons saving a large multi-line batch felt slow (see
+# append_transactions_batch below for the other: batching the rows
+# themselves into one API call instead of one call per row).
+_known_existing_tabs: set = set()
+
 
 def _get_sheets_service():
     """
@@ -113,9 +121,14 @@ def _ensure_transactions_sheet_exists(sheet, tab_name: str):
     """
     Creates a transactions tab with a header row if it doesn't exist
     yet. Called lazily from append_transaction — a brand new user's
-    tab isn't created until their first saved entry.
+    tab isn't created until their first saved entry. Short-circuits
+    via _known_existing_tabs once a tab has been confirmed once in
+    this process, to avoid a metadata round trip on every single call.
     """
+    if tab_name in _known_existing_tabs:
+        return
     if _tab_exists(sheet, tab_name):
+        _known_existing_tabs.add(tab_name)
         return
 
     sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
@@ -126,6 +139,7 @@ def _ensure_transactions_sheet_exists(sheet, tab_name: str):
         valueInputOption="USER_ENTERED",
         body={"values": [["Date", "Type", "Category", "Amount", "Description"]]}
     ).execute()
+    _known_existing_tabs.add(tab_name)
 
 
 async def append_transaction(user_id: int, date: str, type_tr: str, category: str, amount: float, description: str):
@@ -154,6 +168,49 @@ async def append_transaction(user_id: int, date: str, type_tr: str, category: st
         return request.execute()
 
     # Offload the synchronous API call to a separate background thread
+    return await asyncio.to_thread(_retry_call, sync_worker)
+
+
+async def append_transactions_batch(user_id: int, entries: list):
+    """
+    Appends multiple transaction rows in a single API call, rather
+    than one call per entry. Used by the multi-line "save all"
+    confirmation flow — looping append_transaction() once per row made
+    saving a large batch (10-20+ lines pasted at once) noticeably slow,
+    since each call is a separate network round trip (and, before the
+    _known_existing_tabs cache above, an extra metadata round trip on
+    top of that). One batched call cuts this down to a single request
+    no matter how many rows are in the batch.
+
+    `entries` is a list of dicts, each with date/type_tr/category/
+    amount/description keys (the same shape as a single pending entry
+    used elsewhere in the batch-confirm flow).
+
+    This call is all-or-nothing: if it fails, none of the rows are
+    saved (unlike the old per-entry loop, which could partially
+    succeed). That trade-off is intentional — a single atomic request
+    is both faster and avoids the confusing "10 of 19 saved, here's
+    which ones failed" state a partial loop could leave behind.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
+        _ensure_transactions_sheet_exists(sheet, tab_name)
+
+        row_values = [
+            [e["date"], e["type_tr"], e["category"], e["amount"], e["description"]]
+            for e in entries
+        ]
+
+        sheet.values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{tab_name}!A:E",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": row_values}
+        ).execute()
+
     return await asyncio.to_thread(_retry_call, sync_worker)
 
 
@@ -514,9 +571,14 @@ def _ensure_budgets_sheet_exists(sheet, tab_name: str):
     """
     Creates a budgets tab with a header row if it doesn't exist yet.
     Called lazily from set_budget — the tab isn't needed until someone
-    actually sets their first limit.
+    actually sets their first limit. Shares the same _known_existing_tabs
+    cache as _ensure_transactions_sheet_exists, since tab names never
+    collide between the two (different base names).
     """
+    if tab_name in _known_existing_tabs:
+        return
     if _tab_exists(sheet, tab_name):
+        _known_existing_tabs.add(tab_name)
         return
 
     sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
@@ -527,6 +589,7 @@ def _ensure_budgets_sheet_exists(sheet, tab_name: str):
         valueInputOption="USER_ENTERED",
         body={"values": [["Category", "MonthlyLimit"]]}
     ).execute()
+    _known_existing_tabs.add(tab_name)
 
 
 async def get_budgets(user_id: int):

@@ -15,7 +15,7 @@ from core import reminder
 from core import language
 from core.i18n import t
 from core.sheets import (
-    append_transaction, get_last_transaction,
+    append_transaction, append_transactions_batch, get_last_transaction,
     delete_last_transaction, get_all_transactions,
     get_last_n_transactions, delete_last_n_transactions,
     set_budget, update_transaction_row
@@ -338,30 +338,19 @@ async def cb_batch_confirm(callback: CallbackQuery):
         await callback.message.edit_text(t("confirmation_expired_body_batch", lang))
         return
 
-    saved = 0
-    for entry in entries:
-        try:
-            await append_transaction(
-                callback.from_user.id,
-                date=entry["date"], type_tr=entry["type_tr"], category=entry["category"],
-                amount=entry["amount"], description=entry["description"]
-            )
-            _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
-            saved += 1
-        except Exception:
-            pass  # continue trying the rest; report the final count below
-
-    if saved == len(entries):
-        _last_action_count[callback.from_user.id] = saved
-        await callback.message.edit_text(t("batch_saved_all", lang, n=saved))
-        await callback.answer(t("toast_saved", lang))
-    else:
-        if saved > 0:
-            _last_action_count[callback.from_user.id] = saved
-        await callback.message.edit_text(
-            t("batch_saved_partial", lang, saved=saved, total=len(entries))
-        )
+    try:
+        await append_transactions_batch(callback.from_user.id, entries)
+    except Exception as e:
+        await callback.message.edit_text(t("err_sheet_write", lang, e=e))
         await callback.answer()
+        return
+
+    for entry in entries:
+        _record_recent_entry(callback.from_user.id, entry["type_tr"], entry["category"], entry["amount"])
+
+    _last_action_count[callback.from_user.id] = len(entries)
+    await callback.message.edit_text(t("batch_saved_all", lang, n=len(entries)))
+    await callback.answer(t("toast_saved", lang))
 
 @router.callback_query(F.data.startswith("batch_cancel:"))
 async def cb_batch_cancel(callback: CallbackQuery):
