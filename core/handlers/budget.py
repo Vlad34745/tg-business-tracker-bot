@@ -129,7 +129,7 @@ async def cb_budget_add(callback: CallbackQuery):
 
     try:
         rows = await get_all_transactions(callback.from_user.id)
-        top_categories = get_frequent_categories(rows, limit=6)
+        top_categories = get_frequent_categories(rows, limit=6, lang=lang, use_defaults=True)
     except Exception:
         top_categories = []
 
@@ -220,3 +220,4 @@ async def cb_nav_budget(callback: CallbackQuery):
         return
     await callback.answer()
     await callback.message.answer(t("budget_menu_prompt", lang), reply_markup=_budget_menu_keyboard(lang))
+

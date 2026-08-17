@@ -4,7 +4,8 @@ from datetime import date
 
 from core.report import (
     compute_monthly_report, format_month_label, get_frequent_categories,
-    compute_period_report, format_period_label, subtract_months
+    compute_period_report, format_period_label, subtract_months,
+    previous_period_range, previous_month, compute_change_pct, DEFAULT_CATEGORIES
 )
 
 
@@ -107,6 +108,29 @@ def test_get_frequent_categories_empty_rows():
 def test_get_frequent_categories_ignores_malformed_rows():
     rows = [["25.07.2026", "Expense"]]  # missing category column
     assert get_frequent_categories(rows, limit=6) == []
+
+
+def test_get_frequent_categories_empty_rows_with_defaults_uk():
+    result = get_frequent_categories([], limit=6, lang="uk", use_defaults=True)
+    assert result == DEFAULT_CATEGORIES["uk"][:6]
+
+
+def test_get_frequent_categories_empty_rows_with_defaults_en():
+    result = get_frequent_categories([], limit=4, lang="en", use_defaults=True)
+    assert result == DEFAULT_CATEGORIES["en"][:4]
+
+
+def test_get_frequent_categories_real_data_takes_priority_over_defaults():
+    rows = [["25.07.2026", "Expense", "Кафе", 100]] * 5
+    result = get_frequent_categories(rows, limit=6, lang="uk", use_defaults=True)
+    assert result == ["Кафе"]  # actual usage, not the default starter list
+
+
+def test_get_frequent_categories_defaults_off_by_default():
+    # use_defaults defaults to False — existing callers (like /find)
+    # that rely on an empty result to trigger their own fallback
+    # message must keep getting an empty list here.
+    assert get_frequent_categories([], limit=6, lang="uk") == []
 
 
 PERIOD_ROWS = [

@@ -18,7 +18,7 @@ from core.sheets import (
     append_transaction, get_last_transaction,
     delete_last_transaction, get_all_transactions,
     get_last_n_transactions, delete_last_n_transactions,
-    set_budget
+    set_budget, update_transaction_row
 )
 from core.handlers._shared import (
     router, is_owner, pending_entries, pending_batches,
@@ -27,9 +27,10 @@ from core.handlers._shared import (
     PERIOD_ARGS_MAP, awaiting_budget_amount, awaiting_budget_category,
     awaiting_remind_time, awaiting_find_query, _record_recent_entry,
     _is_likely_duplicate, _build_preview_text, _build_preview_keyboard,
-    _format_transaction
+    _format_transaction, pending_edits, awaiting_edit_field
 )
 from core.handlers.reports import _generate_report
+from core.handlers.edit import _build_edit_detail_text, _build_edit_detail_keyboard
 from core.handlers.find import _run_find
 from core.handlers.remind import _remind_menu_keyboard
 
@@ -248,7 +249,7 @@ async def cb_entry_edit_category(callback: CallbackQuery):
 
     try:
         rows = await get_all_transactions(callback.from_user.id)
-        top_categories = get_frequent_categories(rows, limit=6)
+        top_categories = get_frequent_categories(rows, limit=6, lang=lang, use_defaults=True)
     except Exception:
         top_categories = []  # fall back to just the custom-input option
 
@@ -561,6 +562,50 @@ async def handle_financial_entry(message: Message):
         await message.answer(
             _build_preview_text(entry, lang),
             reply_markup=_build_preview_keyboard(entry_id, lang)
+        )
+        return
+
+    if user_id in awaiting_edit_field:
+        edit_id, field = awaiting_edit_field.pop(user_id)
+        entry = pending_edits.get(edit_id)
+        if not entry:
+            await message.answer(t("edit_expired", lang))
+            return
+
+        new_value = message.text.strip()
+        if field == "amount":
+            try:
+                amount = float(new_value.replace(",", "."))
+                if amount <= 0:
+                    raise ValueError
+            except ValueError:
+                await message.answer(t("positive_number_prompt", lang))
+                # Put the user back into the same edit step so they can
+                # retry instead of having to tap the button again.
+                awaiting_edit_field[user_id] = (edit_id, field)
+                return
+            entry["amount"] = amount
+        elif field == "category":
+            if not new_value:
+                await message.answer(t("category_empty", lang))
+                awaiting_edit_field[user_id] = (edit_id, field)
+                return
+            entry["category"] = normalize_category(new_value)
+        elif field == "description":
+            entry["description"] = new_value or "-"
+
+        try:
+            await update_transaction_row(
+                user_id, entry["row_index"], entry["date"], entry["type_tr"],
+                entry["category"], entry["amount"], entry["description"]
+            )
+        except Exception as e:
+            await message.answer(t("err_sheet_write", lang, e=e))
+            return
+
+        await message.answer(
+            t("edit_updated", lang) + "\n\n" + _build_edit_detail_text(entry, lang),
+            reply_markup=_build_edit_detail_keyboard(edit_id, lang)
         )
         return
 

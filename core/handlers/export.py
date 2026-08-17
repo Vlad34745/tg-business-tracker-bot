@@ -61,3 +61,4 @@ async def cb_nav_export(callback: CallbackQuery):
         BufferedInputFile(file_bytes, filename=filename),
         caption=t("export_caption", lang, n=len(rows))
     )
+

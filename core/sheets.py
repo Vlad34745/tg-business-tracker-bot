@@ -1,4 +1,6 @@
 import os
+import time
+import random
 import asyncio
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -13,6 +15,45 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 
 # API access scope for Google Sheets
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+# Retry policy for transient Google Sheets API failures — rate limits
+# and momentary server/network hiccups shouldn't surface as an error
+# to the user if a short retry would have succeeded. Non-transient
+# errors (bad request, auth failure) are never retried. Note this
+# retries the *entire* sync_worker, including any writes inside it —
+# if a write actually succeeded server-side but the response was lost
+# before we saw it, a retry could in rare cases duplicate that write.
+# This is an accepted trade-off: silently failing on a blip is worse
+# for a single-user finance tracker than a rare duplicate row, which
+# is easy to spot and fix with /undo.
+_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 3
+_BASE_DELAY_SECONDS = 1.0
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    if isinstance(exc, HttpError):
+        return exc.resp.status in _TRANSIENT_STATUS_CODES
+    return isinstance(exc, (ConnectionError, TimeoutError))
+
+
+def _retry_call(fn):
+    """
+    Runs a synchronous Sheets API call with exponential backoff (plus
+    jitter) on transient errors. Raises immediately for non-transient
+    errors or once retries are exhausted.
+    """
+    last_exc = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return fn()
+        except Exception as e:
+            if not _is_transient_error(e) or attempt == _MAX_RETRIES - 1:
+                raise
+            last_exc = e
+            delay = _BASE_DELAY_SECONDS * (2 ** attempt) + random.uniform(0, 0.5)
+            time.sleep(delay)
+    raise last_exc  # pragma: no cover - loop above always returns or raises
 
 # Per-user tab isolation: each allowed user gets their own
 # "Transactions_<id>" / "Budgets_<id>" tab so multiple people sharing
@@ -31,13 +72,26 @@ def _tab_name(base: str, user_id: int) -> str:
     return f"{base}_{user_id}"
 
 
+_service_cache = None
+
+
 def _get_sheets_service():
-    """Internal synchronous helper to initialize the Google Sheets API client."""
+    """
+    Internal synchronous helper to initialize the Google Sheets API
+    client. The built service object is cached at module level — the
+    credentials file only needs to be read and the client only needs
+    to be constructed once per process, not on every single API call.
+    """
+    global _service_cache
+    if _service_cache is not None:
+        return _service_cache
+
     if not os.path.exists(CREDENTIALS_PATH):
         raise FileNotFoundError(f"Google credentials file missing at: {CREDENTIALS_PATH}")
 
     creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-    return build("sheets", "v4", credentials=creds)
+    _service_cache = build("sheets", "v4", credentials=creds)
+    return _service_cache
 
 
 def _tab_exists(sheet, tab_name: str) -> bool:
@@ -100,7 +154,7 @@ async def append_transaction(user_id: int, date: str, type_tr: str, category: st
         return request.execute()
 
     # Offload the synchronous API call to a separate background thread
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 async def get_last_transaction(user_id: int):
@@ -131,7 +185,7 @@ async def get_last_transaction(user_id: int):
                 return []  # tab doesn't exist yet — no entries for this user
             raise
 
-    rows = await asyncio.to_thread(sync_worker)
+    rows = await asyncio.to_thread(_retry_call, sync_worker)
     if not rows:
         return None
 
@@ -187,7 +241,7 @@ async def delete_last_transaction(user_id: int):
 
         return last_row_data
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 async def get_last_n_transactions(user_id: int, n: int = 1):
@@ -216,7 +270,7 @@ async def get_last_n_transactions(user_id: int, n: int = 1):
         rows = result.get("values", [])
         return rows[-n:] if rows else []
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 async def delete_last_n_transactions(user_id: int, n: int = 1):
@@ -267,7 +321,7 @@ async def delete_last_n_transactions(user_id: int, n: int = 1):
 
         return deleted_rows
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 async def get_all_transactions(user_id: int):
@@ -297,7 +351,108 @@ async def get_all_transactions(user_id: int):
                 return []
             raise
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
+
+
+async def get_recent_transactions_with_index(user_id: int, n: int = 10):
+    """
+    Fetches the last N transaction rows from this user's tab together
+    with each row's 0-based sheet row index (where row 0 is the header
+    row) — that index is what update_transaction_row and
+    delete_transaction_row below need to target a *specific* row,
+    rather than only ever the very last one like delete_last_transaction
+    does. Used to power /edit, which lets a person pick any of their
+    recent entries rather than only the most recent.
+
+    Returns:
+        A list of (row_index, [date, type_tr, category, amount, description])
+        tuples, most recent last. Empty list if there's no data yet.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
+
+        try:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A:E",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 400:
+                return []
+            raise
+
+        rows = result.get("values", [])
+        if len(rows) <= 1:
+            return []  # header only, or no tab data at all
+
+        data_rows = rows[1:]  # skip the header row
+        # Row index i in `rows` corresponds directly to a 0-based sheet
+        # row (row 0 = header), so a data row at position j in
+        # data_rows sits at sheet row index j + 1.
+        indexed = [(i + 1, row) for i, row in enumerate(data_rows)]
+        return indexed[-n:]
+
+    return await asyncio.to_thread(_retry_call, sync_worker)
+
+
+async def update_transaction_row(user_id: int, row_index: int, date: str, type_tr: str, category: str, amount: float, description: str):
+    """
+    Overwrites a specific transaction row (identified by the 0-based
+    sheet row index returned from get_recent_transactions_with_index)
+    with new values. Used by /edit to save a change to an existing
+    entry without needing to delete and re-append it.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
+        # A1 notation is 1-indexed, and row 1 is the header, so sheet
+        # row index N (0-based, N=0 is the header) maps to A1 row N+1.
+        sheet_row = row_index + 1
+
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{tab_name}!A{sheet_row}:E{sheet_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[date, type_tr, category, amount, description]]}
+        ).execute()
+
+    return await asyncio.to_thread(_retry_call, sync_worker)
+
+
+async def delete_transaction_row(user_id: int, row_index: int) -> bool:
+    """
+    Deletes a specific transaction row by its 0-based sheet row index.
+    Returns True if deleted, False if this user has no Transactions
+    tab at all (shouldn't normally happen if row_index came from a
+    real fetch, but guards against a stale/expired /edit session).
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
+
+        sheet_id = _get_sheet_id(sheet, tab_name)
+        if sheet_id is None:
+            return False
+
+        sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
+            "requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id, "dimension": "ROWS",
+                        "startIndex": row_index, "endIndex": row_index + 1
+                    }
+                }
+            }]
+        }).execute()
+        return True
+
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 def _ensure_budgets_sheet_exists(sheet, tab_name: str):
@@ -342,7 +497,7 @@ async def get_budgets(user_id: int):
                 return []
             raise
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 async def set_budget(user_id: int, category: str, limit: float):
@@ -380,7 +535,7 @@ async def set_budget(user_id: int, category: str, limit: float):
                 body={"values": [[category, limit]]}
             ).execute()
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)
 
 
 async def delete_budget(user_id: int, category: str) -> bool:
@@ -423,4 +578,4 @@ async def delete_budget(user_id: int, category: str) -> bool:
         }).execute()
         return True
 
-    return await asyncio.to_thread(sync_worker)
+    return await asyncio.to_thread(_retry_call, sync_worker)

@@ -125,3 +125,4 @@ async def cmd_stats(message: Message):
         "stats_text", lang,
         static=static_count, auto=auto_count, total=static_count + auto_count
     ))
+

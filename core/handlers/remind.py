@@ -119,3 +119,4 @@ async def cb_nav_remind(callback: CallbackQuery):
         return
     await callback.answer()
     await callback.message.answer(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
+

@@ -55,6 +55,7 @@ Each Telegram command lives in its own module under `core/handlers/`, all regist
 - 📉 **Automated Categorization:** Automatically distinguishes between `Income` and `Expense` based on customizable keywords (Ukrainian and English).
 - 📊 **Google Sheets Integration:** Non-blocking asynchronous data appending to Google Spreadsheet rows.
 - 🔎 **`/last` Command:** Quickly check the most recently logged transaction without opening the spreadsheet.
+- ✏️ **`/edit` Command:** Pick any of your last 10 entries (not just the most recent) from a button list, then change its amount, category, or description, or delete it — no need to open the spreadsheet for older mistakes.
 - 🗑️ **`/undo` Command:** Delete the last transaction with an inline confirmation step to prevent accidental removal. If the last save was a multi-entry batch, undoes the whole batch as one unit.
 - 📊 **`/report` Command:** Plain `/report` (typed or tapped from the menu) shows a two-step button picker — period first (today/week/month/2 months/year/custom), then category count (Top-5/10/15/full list/custom number) — no typing needed. Passing arguments still works directly: `/report 6` (June), `/report 6 2026`, `/report today`, `/report week`, `/report 12d` (last 12 days), `/report 2week`, `/report 2month` (calendar-accurate), `/report year`, `full`, `topN`. The chart image always matches the chosen category count.
 - Windows automation setup included via batch scripting (`.bat`).

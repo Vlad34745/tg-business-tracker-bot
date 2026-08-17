@@ -10,7 +10,8 @@ from aiogram.types import (
 from aiogram.filters import Command
 from core.report import (
     compute_monthly_report, format_month_label,
-    compute_period_report, format_period_label, subtract_months
+    compute_period_report, format_period_label, subtract_months,
+    previous_period_range, previous_month, compute_change_pct
 )
 from core.budget import parse_budgets_rows, check_budget_status
 from core.chart import generate_category_chart
@@ -96,12 +97,14 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
         summary = compute_period_report(rows, custom_start, custom_end)
         period_label = format_period_label(custom_start, custom_end)
         is_month_mode = False
+        prev_summary = compute_period_report(rows, *previous_period_range(custom_start, custom_end))
     elif period_days is not None:
         end_date = now.date()
         start_date = end_date - timedelta(days=period_days - 1)
         summary = compute_period_report(rows, start_date, end_date)
         period_label = format_period_label(start_date, end_date)
         is_month_mode = False
+        prev_summary = compute_period_report(rows, *previous_period_range(start_date, end_date))
     else:
         year, month = now.year, now.month
         if args:
@@ -122,6 +125,7 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
         summary = compute_monthly_report(rows, year, month)
         period_label = format_month_label(year, month, lang)
         is_month_mode = True
+        prev_summary = compute_monthly_report(rows, *previous_month(year, month))
 
     if summary["count"] == 0:
         await answer(t("report_no_entries_period", lang, period_label=period_label))
@@ -134,6 +138,23 @@ async def _generate_report(user_id: int, raw_args: list, answer, answer_photo):
         t("report_expense_label", lang, v=summary['expense_total']),
         f"{balance_icon} " + t("report_balance_label", lang, v=summary['balance']),
     ]
+
+    # Compare expenses against the immediately preceding period of the
+    # same length (or the previous calendar month, in month mode).
+    # Skipped when there's no prior data to compare against — a 0%
+    # baseline would be misleading, not informative.
+    if prev_summary["count"] > 0:
+        expense_change = compute_change_pct(summary["expense_total"], prev_summary["expense_total"])
+        if expense_change is not None:
+            if expense_change > 0.5:
+                change_icon = "🔺"
+            elif expense_change < -0.5:
+                change_icon = "🔻"
+            else:
+                change_icon = "➖"
+            sign = "+" if expense_change >= 0 else ""
+            lines.append(t("report_prev_period_title", lang))
+            lines.append(t("report_expense_change", lang, icon=change_icon, sign=sign, pct=expense_change))
 
     if full_report:
         categories_to_show = summary["expense_by_category"]
@@ -284,3 +305,4 @@ async def cb_report_generate(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)  # remove the picker buttons
     await _generate_report(callback.from_user.id, args, callback.message.answer, callback.message.answer_photo)
+

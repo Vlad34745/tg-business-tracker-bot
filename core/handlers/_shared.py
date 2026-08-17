@@ -73,6 +73,24 @@ def _store_pending_batch(entries: list) -> str:
         pending_batches.popitem(last=False)
     return batch_id
 
+# Holds an in-progress /edit session for an existing (already saved)
+# transaction: row_index (0-based sheet row, see core/sheets.py) plus
+# the entry's current date/type/category/amount/description. Created
+# when a person taps one of the recent entries listed by /edit, and
+# updated in place as they change individual fields, so the sheet
+# only needs one write per field actually changed rather than one
+# write per keystroke.
+_PENDING_EDITS_MAX = 20
+pending_edits: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _store_pending_edit(entry: dict) -> str:
+    edit_id = uuid.uuid4().hex[:8]
+    pending_edits[edit_id] = entry
+    while len(pending_edits) > _PENDING_EDITS_MAX:
+        pending_edits.popitem(last=False)
+    return edit_id
+
 # Remembers how many rows the most recent successful save added for each
 # user (1 for a normal confirm, N for a multi-entry batch confirm), so
 # /undo can remove the whole batch as one unit instead of just one row.
@@ -82,6 +100,12 @@ _last_action_count: dict = {}
 # pending entry: user_id -> entry_id. The next free-text message from
 # that user is treated as the new category, not a new transaction.
 awaiting_category_text: dict = {}
+
+# Tracks users mid-flow editing a field (amount/category/description)
+# of an existing saved entry via /edit: user_id -> (edit_id, field).
+# The next free-text message is the new value for that field, not a
+# new transaction.
+awaiting_edit_field: dict = {}
 
 # Tracks users who tapped "✏️ Свій варіант" under the /report period
 # picker: their next free-text message is parsed as report arguments
@@ -147,6 +171,9 @@ def _quick_menu_keyboard(lang: str = "uk") -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text=t("btn_export", lang), callback_data="nav:export"),
             InlineKeyboardButton(text=t("btn_language", lang), callback_data="nav:language"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_edit", lang), callback_data="nav:edit"),
         ],
     ])
 

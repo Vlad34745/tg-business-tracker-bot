@@ -125,3 +125,4 @@ async def cb_nav_find(callback: CallbackQuery):
         t("find_prompt", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
+

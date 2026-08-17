@@ -194,6 +194,8 @@ TRANSLATIONS = {
     "report_income_label": {"uk": "💰 <b>Дохід:</b> {v:.2f} грн", "en": "💰 <b>Income:</b> {v:.2f} грн"},
     "report_expense_label": {"uk": "📉 <b>Витрати:</b> {v:.2f} грн", "en": "📉 <b>Expenses:</b> {v:.2f} грн"},
     "report_balance_label": {"uk": "<b>Баланс:</b> {v:.2f} грн", "en": "<b>Balance:</b> {v:.2f} грн"},
+    "report_prev_period_title": {"uk": "\n<b>📊 Порівняно з попереднім періодом:</b>", "en": "\n<b>📊 Compared to the previous period:</b>"},
+    "report_expense_change": {"uk": "{icon} Витрати: {sign}{pct:.0f}%", "en": "{icon} Expenses: {sign}{pct:.0f}%"},
     "report_all_categories_title": {"uk": "🏷️ Усі категорії витрат (за сумою):", "en": "🏷️ All expense categories (by amount):"},
     "report_top_categories_title": {"uk": "🏷️ Топ-{n} категорій витрат:", "en": "🏷️ Top-{n} expense categories:"},
     "report_overage_title": {"uk": "\n<b>⚠️ Перевищено ліміт:</b>", "en": "\n<b>⚠️ Limit exceeded:</b>"},
@@ -208,6 +210,28 @@ TRANSLATIONS = {
     "batch_unrecognized_title": {"uk": "\n⚠️ <b>Не розпізнано ({n}):</b>", "en": "\n⚠️ <b>Not recognized ({n}):</b>"},
     "batch_saved_all": {"uk": "✅ <b>Збережено всі {n} записів!</b>", "en": "✅ <b>All {n} entries saved!</b>"},
     "batch_saved_partial": {"uk": "⚠️ <b>Збережено {saved} з {total} записів.</b> Решта не записалась через помилку.", "en": "⚠️ <b>Saved {saved} of {total} entries.</b> The rest failed to save due to an error."},
+
+    # --- /edit ---
+    "edit_no_entries": {"uk": "📭 Ще немає жодного запису для редагування.", "en": "📭 There are no entries to edit yet."},
+    "edit_pick_prompt": {"uk": "✏️ <b>Обери запис для редагування:</b>", "en": "✏️ <b>Pick an entry to edit:</b>"},
+    "edit_entry_detail": {
+        "uk": "✏️ <b>Редагування запису</b>\n\n{label_date} {date}\n{icon} {label_type} {type_label}\n{label_category} {category}\n{label_amount} {amount} грн\n{label_description} {description}",
+        "en": "✏️ <b>Editing entry</b>\n\n{label_date} {date}\n{icon} {label_type} {type_label}\n{label_category} {category}\n{label_amount} {amount} грн\n{label_description} {description}",
+    },
+    "edit_prompt_amount": {"uk": "💵 Напиши нову суму (напр. <code>150</code>):", "en": "💵 Write the new amount (e.g. <code>150</code>):"},
+    "edit_prompt_category": {"uk": "🏷️ Напиши нову категорію:", "en": "🏷️ Write the new category:"},
+    "edit_prompt_description": {"uk": "📝 Напиши новий опис:", "en": "📝 Write the new description:"},
+    "edit_updated": {"uk": "✅ Оновлено.", "en": "✅ Updated."},
+    "edit_delete_confirm": {"uk": "⚠️ <b>Видалити цей запис назавжди?</b>", "en": "⚠️ <b>Delete this entry permanently?</b>"},
+    "edit_deleted": {"uk": "🗑️ Запис видалено.", "en": "🗑️ Entry deleted."},
+    "edit_delete_failed": {"uk": "❌ Не вдалося видалити — запис уже міг бути змінений.", "en": "❌ Couldn't delete — the entry may have already changed."},
+    "edit_cancelled": {"uk": "❌ Скасовано.", "en": "❌ Cancelled."},
+    "edit_expired": {"uk": "⌛ Сесія редагування застаріла, спробуй /edit ще раз.", "en": "⌛ This edit session expired, try /edit again."},
+    "btn_edit_amount": {"uk": "💵 Сума", "en": "💵 Amount"},
+    "btn_edit_field_category": {"uk": "🏷️ Категорія", "en": "🏷️ Category"},
+    "btn_edit_description": {"uk": "📝 Опис", "en": "📝 Description"},
+    "btn_delete": {"uk": "🗑 Видалити", "en": "🗑 Delete"},
+    "btn_edit": {"uk": "✏️ Редагувати", "en": "✏️ Edit"},
 }
 
 

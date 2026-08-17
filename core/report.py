@@ -15,6 +15,14 @@ MONTH_NAMES_EN = {
     9: "September", 10: "October", 11: "November", 12: "December",
 }
 
+# Starter categories shown as picker buttons for a brand new user who
+# hasn't saved any transactions yet (see get_frequent_categories below).
+# Ordered roughly by how commonly they come up for personal finance.
+DEFAULT_CATEGORIES = {
+    "uk": ["Продукти", "Кафе", "Транспорт", "Комуналка", "Розваги", "Одяг", "Здоров'я", "Інше"],
+    "en": ["Groceries", "Cafe", "Transport", "Utilities", "Entertainment", "Clothes", "Health", "Other"],
+}
+
 # Dates may come back from the Sheets API in either the format they were
 # written in ("2026-07-25") or the sheet's display format after Google
 # auto-detects the cell as a date ("25.07.2026"), depending on locale.
@@ -116,6 +124,39 @@ def compute_period_report(rows: list, start: date, end: date) -> dict:
     return _aggregate_rows(rows, lambda d: start <= d.date() <= end)
 
 
+def previous_period_range(start: date, end: date) -> tuple[date, date]:
+    """
+    The immediately preceding date range of the same length (in days)
+    as [start, end]. Used to compare a report period against "the
+    period just before it" — e.g. this week vs. last week, or the
+    last 7 days vs. the 7 days before that.
+    """
+    length_days = (end - start).days + 1
+    prev_end = date.fromordinal(start.toordinal() - 1)
+    prev_start = date.fromordinal(prev_end.toordinal() - length_days + 1)
+    return prev_start, prev_end
+
+
+def previous_month(year: int, month: int) -> tuple[int, int]:
+    """The calendar month immediately before (year, month)."""
+    if month == 1:
+        return year - 1, 12
+    return year, month - 1
+
+
+def compute_change_pct(current: float, previous: float) -> Optional[float]:
+    """
+    Percentage change from `previous` to `current`. Returns None if
+    `previous` is 0 — comparing against zero prior spending isn't a
+    meaningful percentage (it would be "infinite"), so the caller
+    should skip showing a comparison in that case rather than divide
+    by zero.
+    """
+    if previous == 0:
+        return None
+    return (current - previous) / previous * 100
+
+
 def format_month_label(year: int, month: int, lang: str = "uk") -> str:
     """e.g. 'Липень 2026' (uk) or 'July 2026' (en)"""
     names = MONTH_NAMES_EN if lang == "en" else MONTH_NAMES_UA
@@ -144,11 +185,20 @@ def subtract_months(d: date, months: int) -> date:
     return date(year, month, day)
 
 
-def get_frequent_categories(rows: list, limit: int = 6) -> list:
+def get_frequent_categories(rows: list, limit: int = 6, lang: str = "uk", use_defaults: bool = False) -> list:
     """
     Count how often each category appears across all rows and return
     the most frequent ones, most-used first. Used to power the
     "pick a category" quick-buttons when editing a pending entry.
+
+    If `rows` has no categorized entries yet (a brand new user with
+    nothing saved) and `use_defaults` is True, falls back to a small
+    set of common starter categories in the given language, so the
+    picker isn't empty on a person's very first interaction with the
+    bot. Defaults to False since an empty result is the *correct*
+    signal in some callers (e.g. /find, where suggesting category
+    buttons that are guaranteed to return zero results would be worse
+    than just prompting for a search term).
     """
     counts: dict = {}
     for row in rows:
@@ -160,4 +210,7 @@ def get_frequent_categories(rows: list, limit: int = 6) -> list:
         counts[category] = counts.get(category, 0) + 1
 
     sorted_categories = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    if not sorted_categories and use_defaults:
+        return DEFAULT_CATEGORIES.get(lang, DEFAULT_CATEGORIES["uk"])[:limit]
+
     return [category for category, _ in sorted_categories[:limit]]
