@@ -213,6 +213,7 @@ TRANSLATIONS = {
 
     # --- /edit ---
     "edit_no_entries": {"uk": "📭 Ще немає жодного запису для редагування.", "en": "📭 There are no entries to edit yet."},
+    "edit_no_older_entries": {"uk": "📭 Старіших записів немає.", "en": "📭 No older entries."},
     "edit_pick_prompt": {"uk": "✏️ <b>Обери запис для редагування:</b>", "en": "✏️ <b>Pick an entry to edit:</b>"},
     "edit_entry_detail": {
         "uk": "✏️ <b>Редагування запису</b>\n\n{label_date} {date}\n{icon} {label_type} {type_label}\n{label_category} {category}\n{label_amount} {amount} грн\n{label_description} {description}",
@@ -232,6 +233,7 @@ TRANSLATIONS = {
     "btn_edit_description": {"uk": "📝 Опис", "en": "📝 Description"},
     "btn_delete": {"uk": "🗑 Видалити", "en": "🗑 Delete"},
     "btn_edit": {"uk": "✏️ Редагувати", "en": "✏️ Edit"},
+    "btn_show_older": {"uk": "⬇️ Показати старіші", "en": "⬇️ Show older"},
 }
 
 

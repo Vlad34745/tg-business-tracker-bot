@@ -170,13 +170,14 @@ async def test_get_recent_transactions_with_index_maps_rows_correctly(mock_sheet
         "values": fake_rows
     }
 
-    result = await sheets.get_recent_transactions_with_index(111, n=10)
+    page, has_more = await sheets.get_recent_transactions_with_index(111, n=10)
 
-    assert result == [
+    assert page == [
         (1, ["01.08.2026", "Expense", "Кафе", 100, "A"]),
         (2, ["02.08.2026", "Expense", "Таксі", 50, "B"]),
         (3, ["03.08.2026", "Income", "Зарплата", 20000, "C"]),
     ]
+    assert has_more is False  # fewer rows than the page size — nothing older
 
 
 @pytest.mark.asyncio
@@ -188,9 +189,42 @@ async def test_get_recent_transactions_with_index_respects_n(mock_sheets_service
         "values": fake_rows
     }
 
-    result = await sheets.get_recent_transactions_with_index(111, n=2)
-    assert len(result) == 2
-    assert result[-1][1][0] == "05.08.2026"  # most recent last
+    page, has_more = await sheets.get_recent_transactions_with_index(111, n=2)
+    assert len(page) == 2
+    assert page[-1][1][0] == "05.08.2026"  # most recent last
+    assert has_more is True  # 5 rows total, only showed the last 2
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transactions_with_index_pagination_offset(mock_sheets_service):
+    # 5 data rows; page size 2, offset 2 should skip the 2 most recent
+    # and return the 2 before those, with has_more still True (1 row
+    # older than this page remains).
+    fake_rows = [["Date", "Type", "Category", "Amount", "Description"]] + [
+        [f"0{i}.08.2026", "Expense", "Cat", i * 10, "-"] for i in range(1, 6)
+    ]
+    mock_sheets_service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": fake_rows
+    }
+
+    page, has_more = await sheets.get_recent_transactions_with_index(111, n=2, offset=2)
+    assert [row[0] for _idx, row in page] == ["02.08.2026", "03.08.2026"]
+    assert has_more is True
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transactions_with_index_last_page_has_no_more(mock_sheets_service):
+    fake_rows = [["Date", "Type", "Category", "Amount", "Description"]] + [
+        [f"0{i}.08.2026", "Expense", "Cat", i * 10, "-"] for i in range(1, 6)
+    ]
+    mock_sheets_service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": fake_rows
+    }
+
+    # offset=4 skips the 4 most recent, leaving only the single oldest row.
+    page, has_more = await sheets.get_recent_transactions_with_index(111, n=2, offset=4)
+    assert [row[0] for _idx, row in page] == ["01.08.2026"]
+    assert has_more is False
 
 
 @pytest.mark.asyncio
@@ -198,14 +232,41 @@ async def test_get_recent_transactions_with_index_empty_when_no_data(mock_sheets
     mock_sheets_service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
         "values": [["Date", "Type", "Category", "Amount", "Description"]]  # header only
     }
-    result = await sheets.get_recent_transactions_with_index(111, n=10)
-    assert result == []
+    page, has_more = await sheets.get_recent_transactions_with_index(111, n=10)
+    assert page == []
+    assert has_more is False
 
 
 @pytest.mark.asyncio
 async def test_get_recent_transactions_with_index_empty_when_tab_missing(mock_sheets_service):
     mock_sheets_service.spreadsheets.return_value.values.return_value.get.return_value.execute.side_effect = _http_error(400)
-    result = await sheets.get_recent_transactions_with_index(111, n=10)
+    page, has_more = await sheets.get_recent_transactions_with_index(111, n=10)
+    assert page == []
+    assert has_more is False
+
+
+@pytest.mark.asyncio
+async def test_get_all_transactions_with_index_maps_rows_correctly(mock_sheets_service):
+    fake_rows = [
+        ["Date", "Type", "Category", "Amount", "Description"],
+        ["01.08.2026", "Expense", "Кафе", 100, "A"],
+        ["02.08.2026", "Expense", "Таксі", 50, "B"],
+    ]
+    mock_sheets_service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": fake_rows
+    }
+
+    result = await sheets.get_all_transactions_with_index(111)
+    assert result == [
+        (1, ["01.08.2026", "Expense", "Кафе", 100, "A"]),
+        (2, ["02.08.2026", "Expense", "Таксі", 50, "B"]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_all_transactions_with_index_empty_when_tab_missing(mock_sheets_service):
+    mock_sheets_service.spreadsheets.return_value.values.return_value.get.return_value.execute.side_effect = _http_error(400)
+    result = await sheets.get_all_transactions_with_index(111)
     assert result == []
 
 

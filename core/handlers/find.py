@@ -3,27 +3,34 @@ from aiogram import F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from core.report import get_frequent_categories
-from core.search import filter_transactions
+from core.search import filter_transactions_indexed
 from core import language
 from core.i18n import t
-from core.sheets import get_all_transactions
-from core.handlers._shared import router, is_owner, awaiting_find_query
+from core.sheets import get_all_transactions, get_all_transactions_with_index
+from core.handlers._shared import router, is_owner, awaiting_find_query, _store_pending_edit
+
+# How many of the most recent matches get an "✏️" edit button attached.
+# Matches beyond this are still shown in the summary text but without
+# a button, to keep the keyboard from growing unreasonably long on a
+# broad search.
+MAX_EDIT_BUTTONS = 10
+
 
 async def _run_find(user_id: int, query: str, answer):
     lang = language.get_language(user_id)
     try:
-        rows = await get_all_transactions(user_id)
+        indexed_rows = await get_all_transactions_with_index(user_id)
     except Exception as e:
         await answer(t("err_sheet_read", lang, e=e))
         return
 
-    matches = filter_transactions(rows, query)
+    matches = filter_transactions_indexed(indexed_rows, query)
     if not matches:
         await answer(t("find_no_results", lang, query=query))
         return
 
     total = 0.0
-    for row in matches:
+    for _row_index, row in matches:
         try:
             total += float(str(row[3]).replace(",", "."))
         except (ValueError, IndexError):
@@ -34,14 +41,33 @@ async def _run_find(user_id: int, query: str, answer):
     truncated_note = t("find_truncated_note", lang, n=MAX_SHOWN) if len(matches) > MAX_SHOWN else ""
 
     lines = [t("find_results_title", lang, n=len(matches), query=query, truncated_note=truncated_note)]
-    for row in shown:
+    # Most recent first, both in the text and for numbering the edit buttons.
+    shown_recent_first = list(reversed(shown))
+    for i, (_row_index, row) in enumerate(shown_recent_first, start=1):
         padded = row + ["-"] * (5 - len(row))
         date, type_tr, category, amount, description = padded[:5]
         icon = "💰" if type_tr == "Income" else "📉"
-        lines.append(f"{icon} {date} | {category}: {amount} грн | {description}")
+        marker = f"{i}. " if i <= MAX_EDIT_BUTTONS else ""
+        lines.append(f"{marker}{icon} {date} | {category}: {amount} грн | {description}")
     lines.append(t("find_total_label", lang, total=total))
 
-    await answer("\n".join(lines))
+    buttons = []
+    for i, (row_index, row) in enumerate(shown_recent_first[:MAX_EDIT_BUTTONS], start=1):
+        padded = row + ["-"] * (5 - len(row))
+        date, type_tr, category, amount, description = padded[:5]
+        edit_id = _store_pending_edit({
+            "row_index": row_index, "date": date, "type_tr": type_tr,
+            "category": category, "amount": amount, "description": description
+        })
+        buttons.append(InlineKeyboardButton(text=f"✏️ {i}", callback_data=f"edit_pick:{edit_id}"))
+
+    # Pack the numbered edit buttons 5 per row so they don't run off-screen.
+    keyboard = None
+    if buttons:
+        rows_of_buttons = [buttons[j:j + 5] for j in range(0, len(buttons), 5)]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=rows_of_buttons)
+
+    await answer("\n".join(lines), reply_markup=keyboard)
 
 @router.message(Command("find"))
 async def cmd_find(message: Message):
@@ -125,4 +151,3 @@ async def cb_nav_find(callback: CallbackQuery):
         t("find_prompt", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
-

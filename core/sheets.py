@@ -354,19 +354,18 @@ async def get_all_transactions(user_id: int):
     return await asyncio.to_thread(_retry_call, sync_worker)
 
 
-async def get_recent_transactions_with_index(user_id: int, n: int = 10):
+async def get_all_transactions_with_index(user_id: int):
     """
-    Fetches the last N transaction rows from this user's tab together
-    with each row's 0-based sheet row index (where row 0 is the header
-    row) — that index is what update_transaction_row and
-    delete_transaction_row below need to target a *specific* row,
-    rather than only ever the very last one like delete_last_transaction
-    does. Used to power /edit, which lets a person pick any of their
-    recent entries rather than only the most recent.
+    Fetches every transaction row from this user's tab together with
+    each row's 0-based sheet row index (row 0 = header) — the index
+    that update_transaction_row/delete_transaction_row need to target
+    a specific row. Used by /find to offer an "✑️ Edit" button next to
+    each search result, not just the most recent entries.
 
     Returns:
         A list of (row_index, [date, type_tr, category, amount, description])
-        tuples, most recent last. Empty list if there's no data yet.
+        tuples, oldest first (same order as the sheet). Empty list if
+        the tab has no data (or doesn't exist) yet.
     """
     def sync_worker():
         service = _get_sheets_service()
@@ -387,14 +386,70 @@ async def get_recent_transactions_with_index(user_id: int, n: int = 10):
 
         rows = result.get("values", [])
         if len(rows) <= 1:
-            return []  # header only, or no tab data at all
+            return []
+
+        data_rows = rows[1:]
+        return [(i + 1, row) for i, row in enumerate(data_rows)]
+
+    return await asyncio.to_thread(_retry_call, sync_worker)
+
+
+async def get_recent_transactions_with_index(user_id: int, n: int = 10, offset: int = 0):
+    """
+    Fetches a page of N transaction rows from this user's tab, counting
+    back from the most recent, together with each row's 0-based sheet
+    row index (where row 0 is the header row) — that index is what
+    update_transaction_row and delete_transaction_row below need to
+    target a *specific* row, rather than only ever the very last one
+    like delete_last_transaction does. Used to power /edit, which lets
+    a person pick any of their recent entries rather than only the
+    most recent.
+
+    `offset` skips that many of the most recent entries before taking
+    the page of N — offset=0 is the most recent page, offset=10 is the
+    page before that, and so on. Used for the "⬇️ Older" pagination
+    button in /edit.
+
+    Returns:
+        (page, has_more) — page is a list of
+        (row_index, [date, type_tr, category, amount, description])
+        tuples for this page, most recent last. has_more is True if
+        there are still older entries beyond this page (i.e. another
+        "⬇️ Older" tap would return more). Empty page + has_more=False
+        if there's no data (or no more pages) at all.
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
+
+        try:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A:E",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 400:
+                return [], False
+            raise
+
+        rows = result.get("values", [])
+        if len(rows) <= 1:
+            return [], False  # header only, or no tab data at all
 
         data_rows = rows[1:]  # skip the header row
         # Row index i in `rows` corresponds directly to a 0-based sheet
         # row (row 0 = header), so a data row at position j in
         # data_rows sits at sheet row index j + 1.
         indexed = [(i + 1, row) for i, row in enumerate(data_rows)]
-        return indexed[-n:]
+
+        end = len(indexed) - offset
+        start = max(0, end - n)
+        page = indexed[start:end] if end > 0 else []
+        has_more = start > 0
+        return page, has_more
 
     return await asyncio.to_thread(_retry_call, sync_worker)
 

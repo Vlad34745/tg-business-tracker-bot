@@ -50,20 +50,24 @@ def _build_edit_detail_keyboard(edit_id: str, lang: str) -> InlineKeyboardMarkup
     ])
 
 
-async def _show_edit_picker(user_id: int, answer, lang: str):
+async def _show_edit_picker(user_id: int, answer, lang: str, offset: int = 0):
     try:
-        indexed_rows = await get_recent_transactions_with_index(user_id, n=10)
+        page, has_more = await get_recent_transactions_with_index(user_id, n=10, offset=offset)
     except Exception as e:
         await answer(t("err_sheet_read", lang, e=e))
         return
 
-    if not indexed_rows:
+    if not page and offset == 0:
         await answer(t("edit_no_entries", lang))
+        return
+    if not page:
+        # Paged past the oldest entry — nothing further back to show.
+        await answer(t("edit_no_older_entries", lang))
         return
 
     # Most recent first for easier scanning.
     buttons = []
-    for row_index, row in reversed(indexed_rows):
+    for row_index, row in reversed(page):
         padded = row + ["-"] * (5 - len(row))
         date, type_tr, category, amount, description = padded[:5]
         edit_id = _store_pending_edit({
@@ -72,6 +76,11 @@ async def _show_edit_picker(user_id: int, answer, lang: str):
         })
         buttons.append([InlineKeyboardButton(
             text=_entry_button_label(row), callback_data=f"edit_pick:{edit_id}"
+        )])
+
+    if has_more:
+        buttons.append([InlineKeyboardButton(
+            text=t("btn_show_older", lang), callback_data=f"edit_page:{offset + 10}"
         )])
 
     await answer(t("edit_pick_prompt", lang), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
@@ -94,6 +103,26 @@ async def cb_nav_edit(callback: CallbackQuery):
         return
     await callback.answer()
     await _show_edit_picker(callback.from_user.id, callback.message.answer, lang)
+
+
+@router.callback_query(F.data.startswith("edit_page:"))
+async def cb_edit_page(callback: CallbackQuery):
+    lang = language.get_language(callback.from_user.id)
+    if not is_owner(callback.from_user.id):
+        await callback.answer(t("access_denied", lang), show_alert=True)
+        return
+
+    try:
+        offset = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        offset = 0
+
+    await callback.answer()
+
+    async def edit_in_place(text, reply_markup=None):
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+
+    await _show_edit_picker(callback.from_user.id, edit_in_place, lang, offset=offset)
 
 
 @router.callback_query(F.data.startswith("edit_pick:"))
