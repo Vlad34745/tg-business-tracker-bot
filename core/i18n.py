@@ -228,6 +228,7 @@ TRANSLATIONS = {
     "edit_delete_failed": {"uk": "❌ Не вдалося видалити — запис уже міг бути змінений.", "en": "❌ Couldn't delete — the entry may have already changed."},
     "edit_cancelled": {"uk": "❌ Скасовано.", "en": "❌ Cancelled."},
     "edit_expired": {"uk": "⌛ Сесія редагування застаріла, спробуй /edit ще раз.", "en": "⌛ This edit session expired, try /edit again."},
+    "edit_row_changed": {"uk": "⚠️ Цей запис уже змінився (можливо, видалили інший запис вище, і рядки зсунулись). Відкрий /edit ще раз.", "en": "⚠️ This entry has changed (maybe another entry above it was deleted, shifting rows). Open /edit again."},
     "btn_edit_amount": {"uk": "💵 Сума", "en": "💵 Amount"},
     "btn_edit_field_category": {"uk": "🏷️ Категорія", "en": "🏷️ Category"},
     "btn_edit_description": {"uk": "📝 Опис", "en": "📝 Description"},

@@ -8,7 +8,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from core.i18n import t
 from core import language
-from core.sheets import get_recent_transactions_with_index, delete_transaction_row
+from core.sheets import get_recent_transactions_with_index, get_transaction_row, delete_transaction_row
 from core.handlers._shared import (
     router, is_owner, pending_edits, _store_pending_edit, awaiting_edit_field
 )
@@ -19,6 +19,33 @@ def _entry_button_label(row: list) -> str:
     date, type_tr, category, amount, _description = padded[:5]
     icon = "💰" if type_tr == "Income" else "📉"
     return f"{icon} {date} {category}: {amount}"
+
+
+def _rows_match(current_row, entry: dict) -> bool:
+    """
+    True if `current_row` (freshly fetched from the sheet) still holds
+    the same data as `entry` (what /edit last showed the person).
+    Used to guard update_transaction_row/delete_transaction_row calls:
+    if another entry was deleted in between and rows shifted, the row
+    at `entry["row_index"]` may now belong to a *different*
+    transaction — writing to it without this check would silently
+    corrupt the wrong row.
+    """
+    if current_row is None or len(current_row) < 3:
+        return False
+    padded = list(current_row) + ["-"] * (5 - len(current_row))
+    date, type_tr, category, amount, description = padded[:5]
+    try:
+        amount_matches = abs(float(amount) - float(entry["amount"])) < 0.005
+    except (TypeError, ValueError):
+        amount_matches = str(amount) == str(entry["amount"])
+    return (
+        str(date) == str(entry["date"])
+        and str(type_tr) == str(entry["type_tr"])
+        and str(category) == str(entry["category"])
+        and amount_matches
+        and str(description) == str(entry["description"])
+    )
 
 
 def _build_edit_detail_text(entry: dict, lang: str) -> str:
@@ -243,6 +270,18 @@ async def cb_edit_delete_confirm(callback: CallbackQuery):
     entry = pending_edits.pop(edit_id, None)
     if not entry:
         await callback.answer(t("edit_expired", lang), show_alert=True)
+        return
+
+    try:
+        current_row = await get_transaction_row(callback.from_user.id, entry["row_index"])
+    except Exception as e:
+        await callback.message.edit_text(t("err_sheet_read", lang, e=e))
+        await callback.answer()
+        return
+
+    if not _rows_match(current_row, entry):
+        await callback.message.edit_text(t("edit_row_changed", lang))
+        await callback.answer()
         return
 
     try:

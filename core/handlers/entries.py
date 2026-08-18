@@ -18,7 +18,7 @@ from core.sheets import (
     append_transaction, append_transactions_batch, get_last_transaction,
     delete_last_transaction, get_all_transactions,
     get_last_n_transactions, delete_last_n_transactions,
-    set_budget, update_transaction_row
+    set_budget, update_transaction_row, get_transaction_row
 )
 from core.handlers._shared import (
     router, is_owner, pending_entries, pending_batches,
@@ -30,7 +30,7 @@ from core.handlers._shared import (
     _format_transaction, pending_edits, awaiting_edit_field
 )
 from core.handlers.reports import _generate_report
-from core.handlers.edit import _build_edit_detail_text, _build_edit_detail_keyboard
+from core.handlers.edit import _build_edit_detail_text, _build_edit_detail_keyboard, _rows_match
 from core.handlers.find import _run_find
 from core.handlers.remind import _remind_menu_keyboard
 
@@ -564,8 +564,8 @@ async def handle_financial_entry(message: Message):
         new_value = message.text.strip()
         if field == "amount":
             try:
-                amount = float(new_value.replace(",", "."))
-                if amount <= 0:
+                new_amount = float(new_value.replace(",", "."))
+                if new_amount <= 0:
                     raise ValueError
             except ValueError:
                 await message.answer(t("positive_number_prompt", lang))
@@ -573,15 +573,38 @@ async def handle_financial_entry(message: Message):
                 # retry instead of having to tap the button again.
                 awaiting_edit_field[user_id] = (edit_id, field)
                 return
-            entry["amount"] = amount
         elif field == "category":
             if not new_value:
                 await message.answer(t("category_empty", lang))
                 awaiting_edit_field[user_id] = (edit_id, field)
                 return
-            entry["category"] = normalize_category(new_value)
+            new_category = normalize_category(new_value)
         elif field == "description":
-            entry["description"] = new_value or "-"
+            new_description = new_value or "-"
+
+        # Verify the row still holds what /edit last showed before
+        # writing — if another entry was deleted in between, rows may
+        # have shifted and entry["row_index"] could now point at a
+        # different transaction entirely. Checked here (against the
+        # pre-mutation entry) rather than earlier, so a validation
+        # failure above doesn't spend an extra API call for nothing.
+        try:
+            current_row = await get_transaction_row(user_id, entry["row_index"])
+        except Exception as e:
+            await message.answer(t("err_sheet_read", lang, e=e))
+            return
+
+        if not _rows_match(current_row, entry):
+            pending_edits.pop(edit_id, None)
+            await message.answer(t("edit_row_changed", lang))
+            return
+
+        if field == "amount":
+            entry["amount"] = new_amount
+        elif field == "category":
+            entry["category"] = new_category
+        elif field == "description":
+            entry["description"] = new_description
 
         try:
             await update_transaction_row(

@@ -511,6 +511,42 @@ async def get_recent_transactions_with_index(user_id: int, n: int = 10, offset: 
     return await asyncio.to_thread(_retry_call, sync_worker)
 
 
+async def get_transaction_row(user_id: int, row_index: int):
+    """
+    Fetches the current values of a single transaction row by its
+    0-based sheet row index. Used by /edit to verify a row still holds
+    the data it showed the person before committing an update or
+    delete against it — if someone deletes an earlier row in between,
+    every row after it shifts up by one, which would otherwise make
+    /edit silently overwrite or delete the wrong transaction.
+
+    Returns the row as a list, or None if that row no longer exists
+    (out of range, or the tab itself is gone).
+    """
+    def sync_worker():
+        service = _get_sheets_service()
+        sheet = service.spreadsheets()
+        tab_name = _tab_name("Transactions", user_id)
+        sheet_row = row_index + 1  # A1 notation is 1-indexed; row 1 is the header.
+
+        try:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A{sheet_row}:E{sheet_row}",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 400:
+                return None
+            raise
+
+        rows = result.get("values", [])
+        return rows[0] if rows else None
+
+    return await asyncio.to_thread(_retry_call, sync_worker)
+
+
 async def update_transaction_row(user_id: int, row_index: int, date: str, type_tr: str, category: str, amount: float, description: str):
     """
     Overwrites a specific transaction row (identified by the 0-based
