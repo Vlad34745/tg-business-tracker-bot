@@ -61,8 +61,14 @@ async def _show_edit_picker(user_id: int, answer, lang: str, offset: int = 0):
         await answer(t("edit_no_entries", lang))
         return
     if not page:
-        # Paged past the oldest entry — nothing further back to show.
-        await answer(t("edit_no_older_entries", lang))
+        # Paged past the oldest entry — nothing further back to show,
+        # but still offer a way back to the more recent pages rather
+        # than dead-ending here.
+        back_offset = max(0, offset - 10)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t("btn_show_newer", lang), callback_data=f"edit_page:{back_offset}")
+        ]])
+        await answer(t("edit_no_older_entries", lang), reply_markup=keyboard)
         return
 
     # Most recent first for easier scanning.
@@ -78,10 +84,19 @@ async def _show_edit_picker(user_id: int, answer, lang: str, offset: int = 0):
             text=_entry_button_label(row), callback_data=f"edit_pick:{edit_id}"
         )])
 
+    # "Newer" and "Older" nav buttons share a row when both are
+    # available, so paging back and forth doesn't grow the keyboard.
+    nav_row = []
+    if offset > 0:
+        nav_row.append(InlineKeyboardButton(
+            text=t("btn_show_newer", lang), callback_data=f"edit_page:{max(0, offset - 10)}"
+        ))
     if has_more:
-        buttons.append([InlineKeyboardButton(
+        nav_row.append(InlineKeyboardButton(
             text=t("btn_show_older", lang), callback_data=f"edit_page:{offset + 10}"
-        )])
+        ))
+    if nav_row:
+        buttons.append(nav_row)
 
     await answer(t("edit_pick_prompt", lang), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 

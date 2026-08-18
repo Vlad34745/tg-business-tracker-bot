@@ -234,6 +234,7 @@ TRANSLATIONS = {
     "btn_delete": {"uk": "🗑 Видалити", "en": "🗑 Delete"},
     "btn_edit": {"uk": "✏️ Редагувати", "en": "✏️ Edit"},
     "btn_show_older": {"uk": "⬇️ Показати старіші", "en": "⬇️ Show older"},
+    "btn_show_newer": {"uk": "⬆️ Показати новіші", "en": "⬆️ Show newer"},
 }
 
 
