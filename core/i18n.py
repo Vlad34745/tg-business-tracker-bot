@@ -209,7 +209,6 @@ TRANSLATIONS = {
     "batch_preview_title": {"uk": "👀 <b>Перевір {n} записів перед збереженням:</b>\n", "en": "👀 <b>Check {n} entries before saving:</b>\n"},
     "batch_unrecognized_title": {"uk": "\n⚠️ <b>Не розпізнано ({n}):</b>", "en": "\n⚠️ <b>Not recognized ({n}):</b>"},
     "batch_saved_all": {"uk": "✅ <b>Збережено всі {n} записів!</b>", "en": "✅ <b>All {n} entries saved!</b>"},
-    "batch_saved_partial": {"uk": "⚠️ <b>Збережено {saved} з {total} записів.</b> Решта не записалась через помилку.", "en": "⚠️ <b>Saved {saved} of {total} entries.</b> The rest failed to save due to an error."},
 
     # --- /edit ---
     "edit_no_entries": {"uk": "📭 Ще немає жодного запису для редагування.", "en": "📭 There are no entries to edit yet."},

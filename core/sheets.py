@@ -158,14 +158,28 @@ async def append_transaction(user_id: int, date: str, type_tr: str, category: st
         body = {"values": row_values}
         range_name = f"{tab_name}!A:E"
 
-        request = sheet.values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=range_name,
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body=body
-        )
-        return request.execute()
+        try:
+            return sheet.values().append(
+                spreadsheetId=SPREADSHEET_ID, range=range_name,
+                valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
+                body=body
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 400 and tab_name in _known_existing_tabs:
+                # The cache said this tab exists, but the API just told
+                # us otherwise — most likely someone deleted the tab by
+                # hand directly in Google Sheets. Evict the stale cache
+                # entry, recreate the tab, and retry once, rather than
+                # surfacing a confusing error for something the bot can
+                # self-heal.
+                _known_existing_tabs.discard(tab_name)
+                _ensure_transactions_sheet_exists(sheet, tab_name)
+                return sheet.values().append(
+                    spreadsheetId=SPREADSHEET_ID, range=range_name,
+                    valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
+                    body=body
+                ).execute()
+            raise
 
     # Offload the synchronous API call to a separate background thread
     return await asyncio.to_thread(_retry_call, sync_worker)
@@ -202,14 +216,24 @@ async def append_transactions_batch(user_id: int, entries: list):
             [e["date"], e["type_tr"], e["category"], e["amount"], e["description"]]
             for e in entries
         ]
-
-        sheet.values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{tab_name}!A:E",
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
+        append_kwargs = dict(
+            spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:E",
+            valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
             body={"values": row_values}
-        ).execute()
+        )
+
+        try:
+            sheet.values().append(**append_kwargs).execute()
+        except HttpError as e:
+            if e.resp.status == 400 and tab_name in _known_existing_tabs:
+                # Same self-heal as append_transaction: the tab was
+                # apparently deleted by hand since we last confirmed it
+                # existed. Evict the cache, recreate it, and retry once.
+                _known_existing_tabs.discard(tab_name)
+                _ensure_transactions_sheet_exists(sheet, tab_name)
+                sheet.values().append(**append_kwargs).execute()
+            else:
+                raise
 
     return await asyncio.to_thread(_retry_call, sync_worker)
 
@@ -665,29 +689,43 @@ async def set_budget(user_id: int, category: str, limit: float):
         tab_name = _tab_name("Budgets", user_id)
         _ensure_budgets_sheet_exists(sheet, tab_name)
 
-        existing = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A2:A"
-        ).execute().get("values", [])
+        def do_write():
+            existing = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A2:A"
+            ).execute().get("values", [])
 
-        row_number = None
-        for i, row in enumerate(existing):
-            if row and row[0].strip().lower() == category.strip().lower():
-                row_number = i + 2  # +1 for header, +1 for 1-based indexing
-                break
+            row_number = None
+            for i, row in enumerate(existing):
+                if row and row[0].strip().lower() == category.strip().lower():
+                    row_number = i + 2  # +1 for header, +1 for 1-based indexing
+                    break
 
-        if row_number:
-            sheet.values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{tab_name}!A{row_number}:B{row_number}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[category, limit]]}
-            ).execute()
-        else:
-            sheet.values().append(
-                spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:B",
-                valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
-                body={"values": [[category, limit]]}
-            ).execute()
+            if row_number:
+                sheet.values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f"{tab_name}!A{row_number}:B{row_number}",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [[category, limit]]}
+                ).execute()
+            else:
+                sheet.values().append(
+                    spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:B",
+                    valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
+                    body={"values": [[category, limit]]}
+                ).execute()
+
+        try:
+            do_write()
+        except HttpError as e:
+            if e.resp.status == 400 and tab_name in _known_existing_tabs:
+                # Same self-heal as append_transaction: the Budgets tab
+                # was apparently deleted by hand since we last confirmed
+                # it existed. Evict the cache, recreate it, and retry once.
+                _known_existing_tabs.discard(tab_name)
+                _ensure_budgets_sheet_exists(sheet, tab_name)
+                do_write()
+            else:
+                raise
 
     return await asyncio.to_thread(_retry_call, sync_worker)
 

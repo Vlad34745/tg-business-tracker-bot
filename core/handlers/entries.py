@@ -455,174 +455,220 @@ async def cb_nav_undo(callback: CallbackQuery):
         reply_markup=confirm_keyboard
     )
 
-@router.message(F.text)
-async def handle_financial_entry(message: Message):
-    user_id = message.from_user.id
-    lang = language.get_language(user_id)
-    if not is_owner(user_id):
-        await message.answer(t("access_denied", lang))
-        return
+async def _resume_report_args(message: Message, user_id: int, lang: str) -> bool:
+    """If the user is mid-flow typing custom /report arguments, consume
+    this message as that answer and return True. Otherwise return False
+    so the caller tries the next resumable state."""
+    if user_id not in awaiting_report_args:
+        return False
+    awaiting_report_args.pop(user_id)
+    text = message.text.strip()
+    args = [] if text == "." else text.split()
+    await _generate_report(user_id, args, message.answer, message.answer_photo)
+    return True
 
-    # If we're mid-flow waiting for a custom category name, treat this
-    # message as that answer instead of parsing it as a new transaction.
 
-    if user_id in awaiting_report_args:
-        awaiting_report_args.pop(user_id)
-        text = message.text.strip()
-        args = [] if text == "." else text.split()
-        await _generate_report(user_id, args, message.answer, message.answer_photo)
-        return
+async def _resume_report_topn(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: user tapped a period button and is now typing a custom
+    top-N category count for /report."""
+    if user_id not in awaiting_report_topn:
+        return False
+    period_choice = awaiting_report_topn.pop(user_id)
+    text = message.text.strip()
+    try:
+        n = int(text)
+        if n < 1:
+            raise ValueError
+    except ValueError:
+        await message.answer(t("int_over_zero_prompt", lang))
+        return True
+    args = list(PERIOD_ARGS_MAP.get(period_choice, [])) + [f"top{n}"]
+    await _generate_report(user_id, args, message.answer, message.answer_photo)
+    return True
 
-    if user_id in awaiting_report_topn:
-        period_choice = awaiting_report_topn.pop(user_id)
-        text = message.text.strip()
+
+async def _resume_remind_time(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: user tapped '+ Add time' under /remind and is typing
+    the HH:MM time."""
+    if user_id not in awaiting_remind_time:
+        return False
+    awaiting_remind_time.pop(user_id)
+    text = message.text.strip()
+    if not reminder.is_valid_time(text):
+        await message.answer(t("remind_time_invalid", lang))
+        return True
+    added = reminder.add_time(text)
+    norm = reminder.normalize_time(text)
+    msg = t("remind_time_added", lang, time=norm) if added else t("remind_time_exists", lang, time=norm)
+    await message.answer(msg, reply_markup=_remind_menu_keyboard(lang))
+    return True
+
+
+async def _resume_find_query(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: user tapped 'Enter text' under /find and is typing
+    their search query."""
+    if user_id not in awaiting_find_query:
+        return False
+    awaiting_find_query.pop(user_id)
+    query = message.text.strip()
+    if not query:
+        await message.answer(t("query_empty", lang))
+        return True
+    await _run_find(user_id, query, message.answer)
+    return True
+
+
+async def _resume_budget_category(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: user tapped 'Custom category' under /budget's add flow
+    and is typing the category name (amount comes next, via
+    _resume_budget_amount)."""
+    if user_id not in awaiting_budget_category:
+        return False
+    awaiting_budget_category.pop(user_id)
+    category_raw = message.text.strip()
+    category = normalize_category(category_raw)
+    if not category:
+        await message.answer(t("category_empty", lang))
+        return True
+    awaiting_budget_amount[user_id] = category
+    await message.answer(t("write_budget_amount", lang, category=category))
+    return True
+
+
+async def _resume_budget_amount(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: category is picked, now typing the monthly limit amount."""
+    if user_id not in awaiting_budget_amount:
+        return False
+    category = awaiting_budget_amount.pop(user_id)
+    try:
+        limit = float(message.text.strip().replace(",", "."))
+        if limit <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(t("positive_number_prompt", lang))
+        return True
+    try:
+        await set_budget(user_id, category, limit)
+    except Exception as e:
+        await message.answer(t("err_sheet_write", lang, e=e))
+        return True
+    await message.answer(t("budget_limit_set", lang, category=category, limit=limit))
+    return True
+
+
+async def _resume_custom_category(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: user tapped 'Custom option' while editing a pending
+    (not-yet-saved) entry's category before confirming it."""
+    if user_id not in awaiting_category_text:
+        return False
+    entry_id = awaiting_category_text.pop(user_id)
+    entry = pending_entries.get(entry_id)
+    if not entry:
+        await message.answer(t("entry_expired", lang))
+        return True
+
+    new_category = message.text.strip()
+    if new_category:
+        entry["description"] = dedupe_description(entry["description"], new_category)
+        entry["category"] = normalize_category(new_category)
+
+    await message.answer(
+        _build_preview_text(entry, lang),
+        reply_markup=_build_preview_keyboard(entry_id, lang)
+    )
+    return True
+
+
+async def _resume_edit_field(message: Message, user_id: int, lang: str) -> bool:
+    """Mid-flow: user tapped a field button (amount/category/description)
+    under /edit and is typing the new value for an already-saved entry."""
+    if user_id not in awaiting_edit_field:
+        return False
+    edit_id, field = awaiting_edit_field.pop(user_id)
+    entry = pending_edits.get(edit_id)
+    if not entry:
+        await message.answer(t("edit_expired", lang))
+        return True
+
+    new_value = message.text.strip()
+    if field == "amount":
         try:
-            n = int(text)
-            if n < 1:
-                raise ValueError
-        except ValueError:
-            await message.answer(t("int_over_zero_prompt", lang))
-            return
-        args = list(PERIOD_ARGS_MAP.get(period_choice, [])) + [f"top{n}"]
-        await _generate_report(user_id, args, message.answer, message.answer_photo)
-        return
-
-    if user_id in awaiting_remind_time:
-        awaiting_remind_time.pop(user_id)
-        text = message.text.strip()
-        if not reminder.is_valid_time(text):
-            await message.answer(t("remind_time_invalid", lang))
-            return
-        added = reminder.add_time(text)
-        norm = reminder.normalize_time(text)
-        msg = t("remind_time_added", lang, time=norm) if added else t("remind_time_exists", lang, time=norm)
-        await message.answer(msg, reply_markup=_remind_menu_keyboard(lang))
-        return
-
-    if user_id in awaiting_find_query:
-        awaiting_find_query.pop(user_id)
-        query = message.text.strip()
-        if not query:
-            await message.answer(t("query_empty", lang))
-            return
-        await _run_find(user_id, query, message.answer)
-        return
-
-    if user_id in awaiting_budget_category:
-        awaiting_budget_category.pop(user_id)
-        category_raw = message.text.strip()
-        category = normalize_category(category_raw)
-        if not category:
-            await message.answer(t("category_empty", lang))
-            return
-        awaiting_budget_amount[user_id] = category
-        await message.answer(t("write_budget_amount", lang, category=category))
-        return
-
-    if user_id in awaiting_budget_amount:
-        category = awaiting_budget_amount.pop(user_id)
-        try:
-            limit = float(message.text.strip().replace(",", "."))
-            if limit <= 0:
+            new_amount = float(new_value.replace(",", "."))
+            if new_amount <= 0:
                 raise ValueError
         except ValueError:
             await message.answer(t("positive_number_prompt", lang))
-            return
-        try:
-            await set_budget(user_id, category, limit)
-        except Exception as e:
-            await message.answer(t("err_sheet_write", lang, e=e))
-            return
-        await message.answer(t("budget_limit_set", lang, category=category, limit=limit))
-        return
+            # Put the user back into the same edit step so they can
+            # retry instead of having to tap the button again.
+            awaiting_edit_field[user_id] = (edit_id, field)
+            return True
+    elif field == "category":
+        if not new_value:
+            await message.answer(t("category_empty", lang))
+            awaiting_edit_field[user_id] = (edit_id, field)
+            return True
+        new_category = normalize_category(new_value)
+    elif field == "description":
+        new_description = new_value or "-"
 
-    if user_id in awaiting_category_text:
-        entry_id = awaiting_category_text.pop(user_id)
-        entry = pending_entries.get(entry_id)
-        if not entry:
-            await message.answer(t("entry_expired", lang))
-            return
+    # Verify the row still holds what /edit last showed before writing
+    # — if another entry was deleted in between, rows may have shifted
+    # and entry["row_index"] could now point at a different transaction
+    # entirely. Checked here (against the pre-mutation entry) rather
+    # than earlier, so a validation failure above doesn't spend an
+    # extra API call for nothing.
+    try:
+        current_row = await get_transaction_row(user_id, entry["row_index"])
+    except Exception as e:
+        await message.answer(t("err_sheet_read", lang, e=e))
+        return True
 
-        new_category = message.text.strip()
-        if new_category:
-            entry["description"] = dedupe_description(entry["description"], new_category)
-            entry["category"] = normalize_category(new_category)
+    if not _rows_match(current_row, entry):
+        pending_edits.pop(edit_id, None)
+        await message.answer(t("edit_row_changed", lang))
+        return True
 
-        await message.answer(
-            _build_preview_text(entry, lang),
-            reply_markup=_build_preview_keyboard(entry_id, lang)
+    if field == "amount":
+        entry["amount"] = new_amount
+    elif field == "category":
+        entry["category"] = new_category
+    elif field == "description":
+        entry["description"] = new_description
+
+    try:
+        await update_transaction_row(
+            user_id, entry["row_index"], entry["date"], entry["type_tr"],
+            entry["category"], entry["amount"], entry["description"]
         )
-        return
+    except Exception as e:
+        await message.answer(t("err_sheet_write", lang, e=e))
+        return True
 
-    if user_id in awaiting_edit_field:
-        edit_id, field = awaiting_edit_field.pop(user_id)
-        entry = pending_edits.get(edit_id)
-        if not entry:
-            await message.answer(t("edit_expired", lang))
-            return
+    await message.answer(
+        t("edit_updated", lang) + "\n\n" + _build_edit_detail_text(entry, lang),
+        reply_markup=_build_edit_detail_keyboard(edit_id, lang)
+    )
+    return True
 
-        new_value = message.text.strip()
-        if field == "amount":
-            try:
-                new_amount = float(new_value.replace(",", "."))
-                if new_amount <= 0:
-                    raise ValueError
-            except ValueError:
-                await message.answer(t("positive_number_prompt", lang))
-                # Put the user back into the same edit step so they can
-                # retry instead of having to tap the button again.
-                awaiting_edit_field[user_id] = (edit_id, field)
-                return
-        elif field == "category":
-            if not new_value:
-                await message.answer(t("category_empty", lang))
-                awaiting_edit_field[user_id] = (edit_id, field)
-                return
-            new_category = normalize_category(new_value)
-        elif field == "description":
-            new_description = new_value or "-"
 
-        # Verify the row still holds what /edit last showed before
-        # writing — if another entry was deleted in between, rows may
-        # have shifted and entry["row_index"] could now point at a
-        # different transaction entirely. Checked here (against the
-        # pre-mutation entry) rather than earlier, so a validation
-        # failure above doesn't spend an extra API call for nothing.
-        try:
-            current_row = await get_transaction_row(user_id, entry["row_index"])
-        except Exception as e:
-            await message.answer(t("err_sheet_read", lang, e=e))
-            return
+# Checked in this order for every free-text message: the first one
+# whose corresponding awaiting_* state is set "claims" the message and
+# the rest are skipped. A message that matches none of them is treated
+# as a new transaction to parse (see _handle_new_entry below).
+_RESUMABLE_FLOWS = [
+    _resume_report_args, _resume_report_topn, _resume_remind_time,
+    _resume_find_query, _resume_budget_category, _resume_budget_amount,
+    _resume_custom_category, _resume_edit_field,
+]
 
-        if not _rows_match(current_row, entry):
-            pending_edits.pop(edit_id, None)
-            await message.answer(t("edit_row_changed", lang))
-            return
 
-        if field == "amount":
-            entry["amount"] = new_amount
-        elif field == "category":
-            entry["category"] = new_category
-        elif field == "description":
-            entry["description"] = new_description
-
-        try:
-            await update_transaction_row(
-                user_id, entry["row_index"], entry["date"], entry["type_tr"],
-                entry["category"], entry["amount"], entry["description"]
-            )
-        except Exception as e:
-            await message.answer(t("err_sheet_write", lang, e=e))
-            return
-
-        await message.answer(
-            t("edit_updated", lang) + "\n\n" + _build_edit_detail_text(entry, lang),
-            reply_markup=_build_edit_detail_keyboard(edit_id, lang)
-        )
-        return
-
-    # Multi-line input: treat each non-empty line as a separate
-    # transaction to confirm and save together.
+async def _handle_new_entry(message: Message, user_id: int, lang: str) -> None:
+    """
+    No mid-flow state claimed this message — parse it as a new
+    transaction. Multi-line input (2+ non-empty lines) is treated as a
+    batch of separate transactions to confirm together; single-line
+    input is parsed as one transaction.
+    """
     lines = [line.strip() for line in message.text.split("\n") if line.strip()]
     if len(lines) > 1:
         current_date = datetime.now().strftime("%Y-%m-%d")
@@ -670,4 +716,23 @@ async def handle_financial_entry(message: Message):
     await message.answer(
         _build_preview_text(pending_entries[entry_id], lang),
         reply_markup=_build_preview_keyboard(entry_id, lang)
-)
+    )
+
+
+@router.message(F.text)
+async def handle_financial_entry(message: Message):
+    user_id = message.from_user.id
+    lang = language.get_language(user_id)
+    if not is_owner(user_id):
+        await message.answer(t("access_denied", lang))
+        return
+
+    # If we're mid-flow waiting for an answer to some other command
+    # (report period, budget amount, edit field, etc.), the first
+    # matching resumer below claims this message instead of it being
+    # parsed as a new transaction.
+    for resume in _RESUMABLE_FLOWS:
+        if await resume(message, user_id, lang):
+            return
+
+    await _handle_new_entry(message, user_id, lang)

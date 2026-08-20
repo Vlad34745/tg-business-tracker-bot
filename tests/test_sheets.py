@@ -371,3 +371,98 @@ async def test_tab_exists_cache_is_per_tab_name(mock_sheets_service):
 
     metadata_calls = mock_sheets_service.spreadsheets.return_value.get.call_args_list
     assert len(metadata_calls) == 2  # different tab names, each checked once
+
+
+# --- self-heal when a tab was deleted by hand (cache says it exists, API disagrees) ---
+
+@pytest.mark.asyncio
+async def test_append_transaction_self_heals_after_manual_tab_deletion(mock_sheets_service):
+    sheets._known_existing_tabs.add("Transactions")  # cache believes the tab still exists
+
+    call_count = {"n": 0}
+
+    def fake_append(**kwargs):
+        call_count["n"] += 1
+        result = Mock()
+        if call_count["n"] == 1:
+            result.execute.side_effect = _http_error(400)
+        else:
+            result.execute.return_value = {"updates": {"updatedRows": 1}}
+        return result
+
+    mock_sheets_service.spreadsheets.return_value.values.return_value.append.side_effect = fake_append
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {"sheets": []}
+
+    await sheets.append_transaction(111, "01.08.2026", "Expense", "Кафе", 100, "-")
+
+    assert call_count["n"] == 2  # first attempt failed, retried once after recreating the tab
+    assert mock_sheets_service.spreadsheets.return_value.batchUpdate.called  # tab was recreated
+    assert "Transactions" in sheets._known_existing_tabs  # cache repopulated after self-heal
+
+
+@pytest.mark.asyncio
+async def test_append_transaction_reraises_non_stale_400_errors(mock_sheets_service):
+    # A 400 for a tab NOT in the cache is a normal "doesn't exist yet"
+    # case already handled by _ensure_transactions_sheet_exists — this
+    # self-heal path should only trigger for a tab the cache actively
+    # believed existed. Simulate a 400 that isn't the stale-cache case
+    # by not adding the tab to _known_existing_tabs first.
+    mock_sheets_service.spreadsheets.return_value.values.return_value.append.return_value.execute.side_effect = _http_error(400)
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {"sheets": []}
+
+    with pytest.raises(HttpError):
+        await sheets.append_transaction(111, "01.08.2026", "Expense", "Кафе", 100, "-")
+
+
+@pytest.mark.asyncio
+async def test_append_transactions_batch_self_heals_after_manual_tab_deletion(mock_sheets_service):
+    sheets._known_existing_tabs.add("Transactions")
+
+    call_count = {"n": 0}
+
+    def fake_append(**kwargs):
+        call_count["n"] += 1
+        result = Mock()
+        if call_count["n"] == 1:
+            result.execute.side_effect = _http_error(400)
+        else:
+            result.execute.return_value = {"updates": {"updatedRows": 2}}
+        return result
+
+    mock_sheets_service.spreadsheets.return_value.values.return_value.append.side_effect = fake_append
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {"sheets": []}
+
+    entries = [
+        {"date": "01.08.2026", "type_tr": "Expense", "category": "Кафе", "amount": 100, "description": "-"},
+        {"date": "01.08.2026", "type_tr": "Expense", "category": "Таксі", "amount": 50, "description": "-"},
+    ]
+    await sheets.append_transactions_batch(111, entries)
+
+    assert call_count["n"] == 2
+    assert "Transactions" in sheets._known_existing_tabs
+
+
+@pytest.mark.asyncio
+async def test_set_budget_self_heals_after_manual_tab_deletion(mock_sheets_service):
+    sheets._known_existing_tabs.add("Budgets")
+
+    get_values_call_count = {"n": 0}
+
+    def fake_get(**kwargs):
+        get_values_call_count["n"] += 1
+        result = Mock()
+        if get_values_call_count["n"] == 1:
+            result.execute.side_effect = _http_error(400)
+        else:
+            result.execute.return_value = {"values": []}
+        return result
+
+    mock_sheets_service.spreadsheets.return_value.values.return_value.get.side_effect = fake_get
+    mock_sheets_service.spreadsheets.return_value.get.return_value.execute.return_value = {"sheets": []}
+
+    await sheets.set_budget(111, "Кафе", 1000)
+
+    assert get_values_call_count["n"] == 2  # first (failed) lookup, then the retried one
+    assert "Budgets" in sheets._known_existing_tabs
+    # the retried write should have gone through as an append (new category)
+    assert mock_sheets_service.spreadsheets.return_value.values.return_value.append.called
