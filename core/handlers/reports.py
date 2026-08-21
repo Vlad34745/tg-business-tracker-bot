@@ -20,7 +20,7 @@ from core.i18n import t
 from core.sheets import get_all_transactions, get_budgets
 from core.handlers._shared import (
     router, is_owner, awaiting_report_args, awaiting_report_topn,
-    PERIOD_ARGS_MAP
+    PERIOD_ARGS_MAP, clear_awaiting_states
 )
 
 logger = logging.getLogger(__name__)
@@ -260,6 +260,7 @@ async def cb_report_period(callback: CallbackQuery):
     choice = callback.data.split(":", 1)[1]
 
     if choice == "custom":
+        clear_awaiting_states(callback.from_user.id)
         awaiting_report_args[callback.from_user.id] = True
         await callback.answer()
         await callback.message.edit_text(t("report_custom_period_prompt", lang))
@@ -291,6 +292,7 @@ async def cb_report_generate(callback: CallbackQuery):
     _, period_choice, top_choice = callback.data.split(":", 2)
 
     if top_choice == "customtop":
+        clear_awaiting_states(callback.from_user.id)
         awaiting_report_topn[callback.from_user.id] = period_choice
         await callback.answer()
         await callback.message.edit_text(t("report_custom_topn_prompt", lang))
@@ -305,4 +307,3 @@ async def cb_report_generate(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)  # remove the picker buttons
     await _generate_report(callback.from_user.id, args, callback.message.answer, callback.message.answer_photo)
-

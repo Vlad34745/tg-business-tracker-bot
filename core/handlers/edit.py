@@ -10,7 +10,8 @@ from core.i18n import t
 from core import language
 from core.sheets import get_recent_transactions_with_index, get_transaction_row, delete_transaction_row
 from core.handlers._shared import (
-    router, is_owner, pending_edits, _store_pending_edit, awaiting_edit_field
+    router, is_owner, pending_edits, _store_pending_edit, awaiting_edit_field,
+    clear_awaiting_states
 )
 
 
@@ -199,6 +200,7 @@ async def cb_edit_amount(callback: CallbackQuery):
         await callback.answer(t("edit_expired", lang), show_alert=True)
         return
 
+    clear_awaiting_states(callback.from_user.id)
     awaiting_edit_field[callback.from_user.id] = (edit_id, "amount")
     await callback.answer()
     await callback.message.edit_text(t("edit_prompt_amount", lang))
@@ -216,6 +218,7 @@ async def cb_edit_category(callback: CallbackQuery):
         await callback.answer(t("edit_expired", lang), show_alert=True)
         return
 
+    clear_awaiting_states(callback.from_user.id)
     awaiting_edit_field[callback.from_user.id] = (edit_id, "category")
     await callback.answer()
     await callback.message.edit_text(t("edit_prompt_category", lang))
@@ -233,6 +236,7 @@ async def cb_edit_desc(callback: CallbackQuery):
         await callback.answer(t("edit_expired", lang), show_alert=True)
         return
 
+    clear_awaiting_states(callback.from_user.id)
     awaiting_edit_field[callback.from_user.id] = (edit_id, "description")
     await callback.answer()
     await callback.message.edit_text(t("edit_prompt_description", lang))

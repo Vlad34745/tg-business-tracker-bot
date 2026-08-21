@@ -7,7 +7,7 @@ from core.search import filter_transactions_indexed
 from core import language
 from core.i18n import t
 from core.sheets import get_all_transactions, get_all_transactions_with_index
-from core.handlers._shared import router, is_owner, awaiting_find_query, _store_pending_edit
+from core.handlers._shared import router, is_owner, awaiting_find_query, _store_pending_edit, clear_awaiting_states
 
 # How many of the most recent matches get an "✏️" edit button attached.
 # Matches beyond this are still shown in the summary text but without
@@ -120,6 +120,7 @@ async def cb_find_custom(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
+    clear_awaiting_states(callback.from_user.id)
     awaiting_find_query[callback.from_user.id] = True
     await callback.answer()
     await callback.message.edit_text(t("write_search_query", lang))

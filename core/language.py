@@ -63,6 +63,7 @@ COMMANDS_UK = [
     BotCommand(command="export", description="Експорт усіх записів у CSV"),
     BotCommand(command="find", description="Пошук: категорії кнопками або /find текст"),
     BotCommand(command="remind", description="Нагадування — час(и) і увімк/вимк кнопками"),
+    BotCommand(command="cancel", description="Скасувати поточну дію (звіт/бюджет/редагування тощо)"),
     BotCommand(command="language", description="Мова бота / Bot language"),
 ]
 COMMANDS_EN = [
@@ -75,6 +76,7 @@ COMMANDS_EN = [
     BotCommand(command="export", description="Export all entries to CSV"),
     BotCommand(command="find", description="Search: category buttons or /find text"),
     BotCommand(command="remind", description="Reminders — time(s) and on/off with buttons"),
+    BotCommand(command="cancel", description="Cancel the current action (report/budget/edit, etc.)"),
     BotCommand(command="language", description="Bot language / Мова бота"),
 ]
 

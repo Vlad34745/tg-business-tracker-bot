@@ -10,7 +10,8 @@ from core import language
 from core.i18n import t
 from core.sheets import get_all_transactions, get_budgets, set_budget, delete_budget
 from core.handlers._shared import (
-    router, is_owner, awaiting_budget_amount, awaiting_budget_category
+    router, is_owner, awaiting_budget_amount, awaiting_budget_category,
+    clear_awaiting_states
 )
 
 async def _show_budget_view(user_id: int, answer):
@@ -150,6 +151,7 @@ async def cb_budget_set_category(callback: CallbackQuery):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
     category = callback.data.split(":", 1)[1]
+    clear_awaiting_states(callback.from_user.id)
     awaiting_budget_amount[callback.from_user.id] = category
     await callback.answer()
     await callback.message.edit_text(t("write_budget_amount", lang, category=category))
@@ -160,6 +162,7 @@ async def cb_budget_set_category_custom(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
+    clear_awaiting_states(callback.from_user.id)
     awaiting_budget_category[callback.from_user.id] = True
     await callback.answer()
     await callback.message.edit_text(t("write_category_name", lang))
@@ -220,4 +223,3 @@ async def cb_nav_budget(callback: CallbackQuery):
         return
     await callback.answer()
     await callback.message.answer(t("budget_menu_prompt", lang), reply_markup=_budget_menu_keyboard(lang))
-

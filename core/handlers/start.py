@@ -8,7 +8,7 @@ from aiogram.filters import CommandStart, Command
 from core import language
 from core import access
 from core.i18n import t
-from core.handlers._shared import router, is_owner, ALLOWED_IDS, _quick_menu_keyboard
+from core.handlers._shared import router, is_owner, ALLOWED_IDS, _quick_menu_keyboard, clear_awaiting_states
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -126,3 +126,18 @@ async def cmd_stats(message: Message):
         static=static_count, auto=auto_count, total=static_count + auto_count
     ))
 
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message):
+    """
+    Clears whichever "waiting for a text reply" flow the person is
+    currently in — /report's custom period, /budget's amount prompt,
+    /edit's field prompt, etc. — without needing to send something
+    that fails validation just to escape a flow they no longer want.
+    """
+    lang = language.get_language(message.from_user.id)
+    if not is_owner(message.from_user.id):
+        await message.answer(t("access_denied", lang))
+        return
+
+    had_state = clear_awaiting_states(message.from_user.id)
+    await message.answer(t("cancel_done", lang) if had_state else t("cancel_nothing", lang))

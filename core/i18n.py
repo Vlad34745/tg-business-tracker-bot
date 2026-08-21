@@ -11,6 +11,8 @@ TRANSLATIONS = {
         "uk": "📈 <b>Статистика бота</b>\n\n👤 У списку .env: {static}\n🆕 Самореєстрація: {auto}\n\n<b>Всього користувачів: {total}</b>",
         "en": "📈 <b>Bot stats</b>\n\n👤 In .env allowlist: {static}\n🆕 Self-registered: {auto}\n\n<b>Total users: {total}</b>",
     },
+    "cancel_done": {"uk": "❌ Скасовано. Можеш надіслати нову транзакцію або обрати команду з меню.", "en": "❌ Cancelled. You can send a new transaction or pick a command from the menu."},
+    "cancel_nothing": {"uk": "Нема чого скасовувати — жоден флоу не активний.", "en": "Nothing to cancel — no active flow."},
     "language_prompt": {
         "uk": "🌐 Обери мову:",
         "en": "🌐 Choose your language:",

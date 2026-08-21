@@ -139,6 +139,36 @@ awaiting_remind_time: dict = {}
 # free-text message is the search query, not a transaction.
 awaiting_find_query: dict = {}
 
+# Every "waiting for a text reply" state above, in one place — used by
+# clear_awaiting_states so starting one flow can't leave a stale state
+# from an abandoned different one around to hijack a later message.
+_ALL_AWAITING_DICTS = [
+    awaiting_category_text, awaiting_edit_field, awaiting_report_args,
+    awaiting_report_topn, awaiting_budget_amount, awaiting_budget_category,
+    awaiting_remind_time, awaiting_find_query,
+]
+
+
+def clear_awaiting_states(user_id: int) -> bool:
+    """
+    Clears every "waiting for a text reply" state for this user across
+    all commands (report/budget/remind/find/edit/custom-category).
+    Called right before a handler sets a *new* such state, so e.g.
+    tapping "Edit category" in /edit can't leave a stale
+    awaiting_budget_amount from an earlier abandoned /budget flow
+    around to swallow a later, unrelated message. Also used by
+    /cancel, so a person can explicitly back out of whichever flow
+    they're stuck in.
+
+    Returns True if anything was actually cleared (so /cancel can
+    distinguish "cancelled something" from "nothing was pending").
+    """
+    cleared = False
+    for d in _ALL_AWAITING_DICTS:
+        if d.pop(user_id, None) is not None:
+            cleared = True
+    return cleared
+
 # Tracks recently *saved* transactions per user, to warn about likely
 # accidental duplicates (e.g. a double-tap or a flaky connection
 # resending the same message). Not a hard block — just a warning banner

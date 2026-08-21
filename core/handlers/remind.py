@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from core import reminder
 from core import language
 from core.i18n import t
-from core.handlers._shared import router, is_owner, awaiting_remind_time
+from core.handlers._shared import router, is_owner, awaiting_remind_time, clear_awaiting_states
 
 def _remind_status_text(lang: str = "uk") -> str:
     status = t("remind_status_on", lang) if reminder.is_enabled() else t("remind_status_off", lang)
@@ -81,6 +81,7 @@ async def cb_remind_add_time(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
+    clear_awaiting_states(callback.from_user.id)
     awaiting_remind_time[callback.from_user.id] = True
     await callback.answer()
     await callback.message.edit_text(t("remind_time_prompt", lang))
@@ -119,4 +120,3 @@ async def cb_nav_remind(callback: CallbackQuery):
         return
     await callback.answer()
     await callback.message.answer(_remind_status_text(lang), reply_markup=_remind_menu_keyboard(lang))
-

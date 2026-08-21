@@ -27,7 +27,8 @@ from core.handlers._shared import (
     PERIOD_ARGS_MAP, awaiting_budget_amount, awaiting_budget_category,
     awaiting_remind_time, awaiting_find_query, _record_recent_entry,
     _is_likely_duplicate, _build_preview_text, _build_preview_keyboard,
-    _format_transaction, pending_edits, awaiting_edit_field
+    _format_transaction, pending_edits, awaiting_edit_field,
+    clear_awaiting_states
 )
 from core.handlers.reports import _generate_report
 from core.handlers.edit import _build_edit_detail_text, _build_edit_detail_keyboard, _rows_match
@@ -304,6 +305,7 @@ async def cb_custom_category(callback: CallbackQuery):
         await callback.message.edit_text(t("confirmation_expired_body", lang))
         return
 
+    clear_awaiting_states(callback.from_user.id)
     awaiting_category_text[callback.from_user.id] = entry_id
     await callback.message.edit_text(t("write_new_category", lang))
     await callback.answer()
@@ -530,6 +532,7 @@ async def _resume_budget_category(message: Message, user_id: int, lang: str) -> 
     if not category:
         await message.answer(t("category_empty", lang))
         return True
+    clear_awaiting_states(user_id)
     awaiting_budget_amount[user_id] = category
     await message.answer(t("write_budget_amount", lang, category=category))
     return True
