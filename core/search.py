@@ -22,7 +22,7 @@ def filter_transactions_indexed(indexed_rows: list, query: str) -> list:
     """
     Same matching logic as filter_transactions, but for rows paired
     with their sheet row index — (row_index, row) tuples, as returned
-    by core.sheets.get_all_transactions_with_index. Used by /find when
+    by core.storage.get_all_transactions_with_index. Used by /find when
     it needs to offer an edit action for each match, which requires
     knowing the exact row each result came from.
     """

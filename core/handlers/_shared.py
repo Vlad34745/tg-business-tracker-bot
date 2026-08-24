@@ -96,6 +96,67 @@ def _store_pending_edit(entry: dict) -> str:
 # /undo can remove the whole batch as one unit instead of just one row.
 _last_action_count: dict = {}
 
+# Snapshot of what /undo showed the person in its confirmation preview
+# — the exact row (or rows, for a batch) it's about to delete. Checked
+# again right before the actual delete in cb_undo_confirm/
+# cb_undo_batch_confirm: if the sheet changed in between (e.g. a new
+# entry was appended, shifting what "the last row" means), the delete
+# aborts instead of silently removing the wrong data. Same defensive
+# pattern as /edit's _rows_match guard, applied here to the read-then-
+# delete race in delete_last_transaction/delete_last_n_transactions.
+_undo_snapshot: dict = {}
+
+# Short-lived per-user cache of the exact category list shown as
+# button choices for the *current* picker (in /budget's add/remove
+# flows, /find's category picker). Buttons reference a category by its
+# position in this list instead of embedding the category text
+# directly in callback_data — Telegram caps callback_data at 64
+# *bytes*, and a longer Cyrillic category (2 bytes/char in UTF-8) can
+# blow past that on its own, e.g. "Продукти для святкового столу" is
+# already 60 bytes before any prefix is added. A fresh picker
+# overwrites the previous entry for that user, so stale index taps
+# from an old picker message naturally fail the bounds check below
+# rather than resolving to some unrelated category.
+_category_choices_cache: dict = {}
+
+
+def _store_category_choices(user_id: int, categories: list) -> None:
+    _category_choices_cache[user_id] = list(categories)
+
+
+def _get_category_choice(user_id: int, index: int):
+    """Returns the category at `index` from this user's most recently
+    shown picker, or None if the index is out of range / nothing was
+    ever stored (e.g. a stale button tap from a much older message)."""
+    choices = _category_choices_cache.get(user_id, [])
+    if 0 <= index < len(choices):
+        return choices[index]
+    return None
+
+
+def _raw_rows_equal(a, b) -> bool:
+    """
+    True if two raw sheet rows ([date, type, category, amount,
+    description]) represent the same transaction — used by /undo to
+    verify the row it's about to delete still matches what it showed
+    the person, tolerating float-vs-int rounding on the amount column.
+    """
+    if a is None or b is None:
+        return False
+    pa = list(a) + ["-"] * (5 - len(a))
+    pb = list(b) + ["-"] * (5 - len(b))
+    for i in range(5):
+        if i == 3:  # amount column — compare numerically with tolerance
+            try:
+                if abs(float(pa[i]) - float(pb[i])) >= 0.005:
+                    return False
+            except (TypeError, ValueError):
+                if str(pa[i]) != str(pb[i]):
+                    return False
+        elif str(pa[i]) != str(pb[i]):
+            return False
+    return True
+
 # Tracks users who are mid-flow entering a custom category name for a
 # pending entry: user_id -> entry_id. The next free-text message from
 # that user is treated as the new category, not a new transaction.

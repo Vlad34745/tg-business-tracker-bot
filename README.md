@@ -1,6 +1,6 @@
 # Telegram Business & P&L Finance Tracker Bot 📊💰
 
-A lightweight, secure, and production-ready Telegram Bot built with **aiogram 3.x** and **Google Sheets API**. It allows users to instantly log income and expenses into a remote Google Spreadsheet directly from their smartphones using clean Python regex parsing (no heavy AI overhead).
+A lightweight, secure Telegram Bot built with **aiogram 3.x** and **Google Sheets API**, ready for small-scale production use. It allows users to instantly log income and expenses into a remote Google Spreadsheet directly from their smartphones using clean Python regex parsing (no heavy AI overhead).
 
 ## 🏗️ Architecture
 
@@ -27,14 +27,14 @@ flowchart LR
     HP --> CH[core/chart.py]
     HP --> AC[core/access.py]
     HP --> LG[core/language.py]
-    HP --> SD[core/sheets.py]
+    HP --> SD[core/storage/]
 
     SD -->|async, per-user tab| GS[(Google Sheets)]
     RM --> RL[core/reminder.py]
     RL -->|daily push| U
 ```
 
-Each Telegram command lives in its own module under `core/handlers/`, all registered on one shared `aiogram.Router` from `_shared.py`. Business logic (parsing, aggregation, budgets, charts) stays in top-level `core/` modules with no Telegram dependency, so it's independently unit-tested (see [Running Tests](#-running-tests)). `core/sheets.py` isolates every user's data into its own spreadsheet tab — no shared state between users beyond the bot process itself.
+Each Telegram command lives in its own module under `core/handlers/`, all registered on one shared `aiogram.Router` from `_shared.py`. Business logic (parsing, aggregation, budgets, charts) stays in top-level `core/` modules with no Telegram dependency, so it's independently unit-tested (see [Running Tests](#-running-tests)). `core/storage/` (client setup, transactions, budgets) isolates every user's data into its own spreadsheet tab — no shared state between users beyond the bot process itself.
 
 ## ✨ Features
 - 🚀 **Instant Logging:** Send messages like `150 Food` or `12000 Freelance Upwork` to automatically categorize and log entries.

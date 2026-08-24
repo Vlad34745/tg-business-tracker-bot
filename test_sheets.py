@@ -1,10 +1,11 @@
 import asyncio
-from core.sheets import append_transaction
+from core.storage import append_transaction
 
 async def main():
     print("[TEST] Sending data to Google Sheets...")
     try:
         await append_transaction(
+            user_id=123456789,  # replace with your own Telegram user ID to test
             date="2026-06-20",
             type_tr="Expense",
             category="Software License",

@@ -74,14 +74,6 @@ def _tab_name(base: str, user_id: int) -> str:
 
 _service_cache = None
 
-# Tabs we've already confirmed exist (or just created) in this process,
-# so _ensure_*_sheet_exists doesn't re-fetch spreadsheet metadata on
-# every single append — that extra round trip per call was one of the
-# two reasons saving a large multi-line batch felt slow (see
-# append_transactions_batch below for the other: batching the rows
-# themselves into one API call instead of one call per row).
-_known_existing_tabs: set = set()
-
 
 def _get_sheets_service():
     """
@@ -121,14 +113,9 @@ def _ensure_transactions_sheet_exists(sheet, tab_name: str):
     """
     Creates a transactions tab with a header row if it doesn't exist
     yet. Called lazily from append_transaction — a brand new user's
-    tab isn't created until their first saved entry. Short-circuits
-    via _known_existing_tabs once a tab has been confirmed once in
-    this process, to avoid a metadata round trip on every single call.
+    tab isn't created until their first saved entry.
     """
-    if tab_name in _known_existing_tabs:
-        return
     if _tab_exists(sheet, tab_name):
-        _known_existing_tabs.add(tab_name)
         return
 
     sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
@@ -139,7 +126,6 @@ def _ensure_transactions_sheet_exists(sheet, tab_name: str):
         valueInputOption="USER_ENTERED",
         body={"values": [["Date", "Type", "Category", "Amount", "Description"]]}
     ).execute()
-    _known_existing_tabs.add(tab_name)
 
 
 async def append_transaction(user_id: int, date: str, type_tr: str, category: str, amount: float, description: str):
@@ -158,83 +144,16 @@ async def append_transaction(user_id: int, date: str, type_tr: str, category: st
         body = {"values": row_values}
         range_name = f"{tab_name}!A:E"
 
-        try:
-            return sheet.values().append(
-                spreadsheetId=SPREADSHEET_ID, range=range_name,
-                valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
-                body=body
-            ).execute()
-        except HttpError as e:
-            if e.resp.status == 400 and tab_name in _known_existing_tabs:
-                # The cache said this tab exists, but the API just told
-                # us otherwise — most likely someone deleted the tab by
-                # hand directly in Google Sheets. Evict the stale cache
-                # entry, recreate the tab, and retry once, rather than
-                # surfacing a confusing error for something the bot can
-                # self-heal.
-                _known_existing_tabs.discard(tab_name)
-                _ensure_transactions_sheet_exists(sheet, tab_name)
-                return sheet.values().append(
-                    spreadsheetId=SPREADSHEET_ID, range=range_name,
-                    valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
-                    body=body
-                ).execute()
-            raise
+        request = sheet.values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_name,
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body=body
+        )
+        return request.execute()
 
     # Offload the synchronous API call to a separate background thread
-    return await asyncio.to_thread(_retry_call, sync_worker)
-
-
-async def append_transactions_batch(user_id: int, entries: list):
-    """
-    Appends multiple transaction rows in a single API call, rather
-    than one call per entry. Used by the multi-line "save all"
-    confirmation flow — looping append_transaction() once per row made
-    saving a large batch (10-20+ lines pasted at once) noticeably slow,
-    since each call is a separate network round trip (and, before the
-    _known_existing_tabs cache above, an extra metadata round trip on
-    top of that). One batched call cuts this down to a single request
-    no matter how many rows are in the batch.
-
-    `entries` is a list of dicts, each with date/type_tr/category/
-    amount/description keys (the same shape as a single pending entry
-    used elsewhere in the batch-confirm flow).
-
-    This call is all-or-nothing: if it fails, none of the rows are
-    saved (unlike the old per-entry loop, which could partially
-    succeed). That trade-off is intentional — a single atomic request
-    is both faster and avoids the confusing "10 of 19 saved, here's
-    which ones failed" state a partial loop could leave behind.
-    """
-    def sync_worker():
-        service = _get_sheets_service()
-        sheet = service.spreadsheets()
-        tab_name = _tab_name("Transactions", user_id)
-        _ensure_transactions_sheet_exists(sheet, tab_name)
-
-        row_values = [
-            [e["date"], e["type_tr"], e["category"], e["amount"], e["description"]]
-            for e in entries
-        ]
-        append_kwargs = dict(
-            spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:E",
-            valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
-            body={"values": row_values}
-        )
-
-        try:
-            sheet.values().append(**append_kwargs).execute()
-        except HttpError as e:
-            if e.resp.status == 400 and tab_name in _known_existing_tabs:
-                # Same self-heal as append_transaction: the tab was
-                # apparently deleted by hand since we last confirmed it
-                # existed. Evict the cache, recreate it, and retry once.
-                _known_existing_tabs.discard(tab_name)
-                _ensure_transactions_sheet_exists(sheet, tab_name)
-                sheet.values().append(**append_kwargs).execute()
-            else:
-                raise
-
     return await asyncio.to_thread(_retry_call, sync_worker)
 
 
@@ -435,18 +354,19 @@ async def get_all_transactions(user_id: int):
     return await asyncio.to_thread(_retry_call, sync_worker)
 
 
-async def get_all_transactions_with_index(user_id: int):
+async def get_recent_transactions_with_index(user_id: int, n: int = 10):
     """
-    Fetches every transaction row from this user's tab together with
-    each row's 0-based sheet row index (row 0 = header) — the index
-    that update_transaction_row/delete_transaction_row need to target
-    a specific row. Used by /find to offer an "✑️ Edit" button next to
-    each search result, not just the most recent entries.
+    Fetches the last N transaction rows from this user's tab together
+    with each row's 0-based sheet row index (where row 0 is the header
+    row) — that index is what update_transaction_row and
+    delete_transaction_row below need to target a *specific* row,
+    rather than only ever the very last one like delete_last_transaction
+    does. Used to power /edit, which lets a person pick any of their
+    recent entries rather than only the most recent.
 
     Returns:
         A list of (row_index, [date, type_tr, category, amount, description])
-        tuples, oldest first (same order as the sheet). Empty list if
-        the tab has no data (or doesn't exist) yet.
+        tuples, most recent last. Empty list if there's no data yet.
     """
     def sync_worker():
         service = _get_sheets_service()
@@ -467,106 +387,14 @@ async def get_all_transactions_with_index(user_id: int):
 
         rows = result.get("values", [])
         if len(rows) <= 1:
-            return []
-
-        data_rows = rows[1:]
-        return [(i + 1, row) for i, row in enumerate(data_rows)]
-
-    return await asyncio.to_thread(_retry_call, sync_worker)
-
-
-async def get_recent_transactions_with_index(user_id: int, n: int = 10, offset: int = 0):
-    """
-    Fetches a page of N transaction rows from this user's tab, counting
-    back from the most recent, together with each row's 0-based sheet
-    row index (where row 0 is the header row) — that index is what
-    update_transaction_row and delete_transaction_row below need to
-    target a *specific* row, rather than only ever the very last one
-    like delete_last_transaction does. Used to power /edit, which lets
-    a person pick any of their recent entries rather than only the
-    most recent.
-
-    `offset` skips that many of the most recent entries before taking
-    the page of N — offset=0 is the most recent page, offset=10 is the
-    page before that, and so on. Used for the "⬇️ Older" pagination
-    button in /edit.
-
-    Returns:
-        (page, has_more) — page is a list of
-        (row_index, [date, type_tr, category, amount, description])
-        tuples for this page, most recent last. has_more is True if
-        there are still older entries beyond this page (i.e. another
-        "⬇️ Older" tap would return more). Empty page + has_more=False
-        if there's no data (or no more pages) at all.
-    """
-    def sync_worker():
-        service = _get_sheets_service()
-        sheet = service.spreadsheets()
-        tab_name = _tab_name("Transactions", user_id)
-
-        try:
-            result = sheet.values().get(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{tab_name}!A:E",
-                valueRenderOption="UNFORMATTED_VALUE",
-                dateTimeRenderOption="FORMATTED_STRING"
-            ).execute()
-        except HttpError as e:
-            if e.resp.status == 400:
-                return [], False
-            raise
-
-        rows = result.get("values", [])
-        if len(rows) <= 1:
-            return [], False  # header only, or no tab data at all
+            return []  # header only, or no tab data at all
 
         data_rows = rows[1:]  # skip the header row
         # Row index i in `rows` corresponds directly to a 0-based sheet
         # row (row 0 = header), so a data row at position j in
         # data_rows sits at sheet row index j + 1.
         indexed = [(i + 1, row) for i, row in enumerate(data_rows)]
-
-        end = len(indexed) - offset
-        start = max(0, end - n)
-        page = indexed[start:end] if end > 0 else []
-        has_more = start > 0
-        return page, has_more
-
-    return await asyncio.to_thread(_retry_call, sync_worker)
-
-
-async def get_transaction_row(user_id: int, row_index: int):
-    """
-    Fetches the current values of a single transaction row by its
-    0-based sheet row index. Used by /edit to verify a row still holds
-    the data it showed the person before committing an update or
-    delete against it — if someone deletes an earlier row in between,
-    every row after it shifts up by one, which would otherwise make
-    /edit silently overwrite or delete the wrong transaction.
-
-    Returns the row as a list, or None if that row no longer exists
-    (out of range, or the tab itself is gone).
-    """
-    def sync_worker():
-        service = _get_sheets_service()
-        sheet = service.spreadsheets()
-        tab_name = _tab_name("Transactions", user_id)
-        sheet_row = row_index + 1  # A1 notation is 1-indexed; row 1 is the header.
-
-        try:
-            result = sheet.values().get(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{tab_name}!A{sheet_row}:E{sheet_row}",
-                valueRenderOption="UNFORMATTED_VALUE",
-                dateTimeRenderOption="FORMATTED_STRING"
-            ).execute()
-        except HttpError as e:
-            if e.resp.status == 400:
-                return None
-            raise
-
-        rows = result.get("values", [])
-        return rows[0] if rows else None
+        return indexed[-n:]
 
     return await asyncio.to_thread(_retry_call, sync_worker)
 
@@ -631,14 +459,9 @@ def _ensure_budgets_sheet_exists(sheet, tab_name: str):
     """
     Creates a budgets tab with a header row if it doesn't exist yet.
     Called lazily from set_budget — the tab isn't needed until someone
-    actually sets their first limit. Shares the same _known_existing_tabs
-    cache as _ensure_transactions_sheet_exists, since tab names never
-    collide between the two (different base names).
+    actually sets their first limit.
     """
-    if tab_name in _known_existing_tabs:
-        return
     if _tab_exists(sheet, tab_name):
-        _known_existing_tabs.add(tab_name)
         return
 
     sheet.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={
@@ -649,7 +472,6 @@ def _ensure_budgets_sheet_exists(sheet, tab_name: str):
         valueInputOption="USER_ENTERED",
         body={"values": [["Category", "MonthlyLimit"]]}
     ).execute()
-    _known_existing_tabs.add(tab_name)
 
 
 async def get_budgets(user_id: int):
@@ -689,43 +511,29 @@ async def set_budget(user_id: int, category: str, limit: float):
         tab_name = _tab_name("Budgets", user_id)
         _ensure_budgets_sheet_exists(sheet, tab_name)
 
-        def do_write():
-            existing = sheet.values().get(
-                spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A2:A"
-            ).execute().get("values", [])
+        existing = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A2:A"
+        ).execute().get("values", [])
 
-            row_number = None
-            for i, row in enumerate(existing):
-                if row and row[0].strip().lower() == category.strip().lower():
-                    row_number = i + 2  # +1 for header, +1 for 1-based indexing
-                    break
+        row_number = None
+        for i, row in enumerate(existing):
+            if row and row[0].strip().lower() == category.strip().lower():
+                row_number = i + 2  # +1 for header, +1 for 1-based indexing
+                break
 
-            if row_number:
-                sheet.values().update(
-                    spreadsheetId=SPREADSHEET_ID,
-                    range=f"{tab_name}!A{row_number}:B{row_number}",
-                    valueInputOption="USER_ENTERED",
-                    body={"values": [[category, limit]]}
-                ).execute()
-            else:
-                sheet.values().append(
-                    spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:B",
-                    valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
-                    body={"values": [[category, limit]]}
-                ).execute()
-
-        try:
-            do_write()
-        except HttpError as e:
-            if e.resp.status == 400 and tab_name in _known_existing_tabs:
-                # Same self-heal as append_transaction: the Budgets tab
-                # was apparently deleted by hand since we last confirmed
-                # it existed. Evict the cache, recreate it, and retry once.
-                _known_existing_tabs.discard(tab_name)
-                _ensure_budgets_sheet_exists(sheet, tab_name)
-                do_write()
-            else:
-                raise
+        if row_number:
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A{row_number}:B{row_number}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[category, limit]]}
+            ).execute()
+        else:
+            sheet.values().append(
+                spreadsheetId=SPREADSHEET_ID, range=f"{tab_name}!A:B",
+                valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS",
+                body={"values": [[category, limit]]}
+            ).execute()
 
     return await asyncio.to_thread(_retry_call, sync_worker)
 

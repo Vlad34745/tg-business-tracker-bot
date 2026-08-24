@@ -6,8 +6,11 @@ from core.report import get_frequent_categories
 from core.search import filter_transactions_indexed
 from core import language
 from core.i18n import t
-from core.sheets import get_all_transactions, get_all_transactions_with_index
-from core.handlers._shared import router, is_owner, awaiting_find_query, _store_pending_edit, clear_awaiting_states
+from core.storage import get_all_transactions, get_all_transactions_with_index
+from core.handlers._shared import (
+    router, is_owner, awaiting_find_query, _store_pending_edit, clear_awaiting_states,
+    _store_category_choices, _get_category_choice
+)
 
 # How many of the most recent matches get an "✏️" edit button attached.
 # Matches beyond this are still shown in the summary text but without
@@ -91,9 +94,10 @@ async def cmd_find(message: Message):
             return
 
         buttons = [
-            [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{cat}")]
-            for cat in top_categories
+            [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{i}")]
+            for i, cat in enumerate(top_categories)
         ]
+        _store_category_choices(message.from_user.id, top_categories)
         buttons.append([InlineKeyboardButton(text=t("btn_enter_text", lang), callback_data="find_custom")])
         await message.answer(
             t("find_prompt", lang),
@@ -109,7 +113,11 @@ async def cb_find_category(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
-    query = callback.data.split(":", 1)[1]
+    idx = int(callback.data.split(":", 1)[1])
+    query = _get_category_choice(callback.from_user.id, idx)
+    if query is None:
+        await callback.answer(t("edit_expired", lang), show_alert=True)
+        return
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
     await _run_find(callback.from_user.id, query, callback.message.answer)
@@ -144,11 +152,13 @@ async def cb_nav_find(callback: CallbackQuery):
         return
 
     buttons = [
-        [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{cat}")]
-        for cat in top_categories
+        [InlineKeyboardButton(text=cat, callback_data=f"find_cat:{i}")]
+        for i, cat in enumerate(top_categories)
     ]
+    _store_category_choices(callback.from_user.id, top_categories)
     buttons.append([InlineKeyboardButton(text=t("btn_enter_text", lang), callback_data="find_custom")])
     await callback.message.answer(
         t("find_prompt", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
+

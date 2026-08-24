@@ -8,10 +8,10 @@ from core.budget import parse_budgets_rows
 from core.validator import normalize_category
 from core import language
 from core.i18n import t
-from core.sheets import get_all_transactions, get_budgets, set_budget, delete_budget
+from core.storage import get_all_transactions, get_budgets, set_budget, delete_budget
 from core.handlers._shared import (
     router, is_owner, awaiting_budget_amount, awaiting_budget_category,
-    clear_awaiting_states
+    clear_awaiting_states, _store_category_choices, _get_category_choice
 )
 
 async def _show_budget_view(user_id: int, answer):
@@ -135,9 +135,10 @@ async def cb_budget_add(callback: CallbackQuery):
         top_categories = []
 
     buttons = [
-        [InlineKeyboardButton(text=cat, callback_data=f"budget_set_cat:{cat}")]
-        for cat in top_categories
+        [InlineKeyboardButton(text=cat, callback_data=f"budget_set_cat:{i}")]
+        for i, cat in enumerate(top_categories)
     ]
+    _store_category_choices(callback.from_user.id, top_categories)
     buttons.append([InlineKeyboardButton(text=t("btn_custom_category", lang), callback_data="budget_set_cat_custom")])
     await callback.message.edit_text(
         t("budget_category_prompt", lang),
@@ -150,7 +151,11 @@ async def cb_budget_set_category(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
-    category = callback.data.split(":", 1)[1]
+    idx = int(callback.data.split(":", 1)[1])
+    category = _get_category_choice(callback.from_user.id, idx)
+    if category is None:
+        await callback.answer(t("edit_expired", lang), show_alert=True)
+        return
     clear_awaiting_states(callback.from_user.id)
     awaiting_budget_amount[callback.from_user.id] = category
     await callback.answer()
@@ -185,10 +190,12 @@ async def cb_budget_remove(callback: CallbackQuery):
         await callback.message.edit_text(t("budget_none_to_remove", lang))
         return
 
+    sorted_categories = sorted(budgets.keys())
     buttons = [
-        [InlineKeyboardButton(text=f"{cat} ({budgets[cat]:.0f} грн)", callback_data=f"budget_del_cat:{cat}")]
-        for cat in sorted(budgets.keys())
+        [InlineKeyboardButton(text=f"{cat} ({budgets[cat]:.0f} грн)", callback_data=f"budget_del_cat:{i}")]
+        for i, cat in enumerate(sorted_categories)
     ]
+    _store_category_choices(callback.from_user.id, sorted_categories)
     await callback.message.edit_text(
         t("budget_which_to_remove", lang),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -201,7 +208,12 @@ async def cb_budget_delete_category(callback: CallbackQuery):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
-    category = callback.data.split(":", 1)[1]
+    idx = int(callback.data.split(":", 1)[1])
+    category = _get_category_choice(callback.from_user.id, idx)
+    if category is None:
+        await callback.answer(t("edit_expired", lang), show_alert=True)
+        return
+
     try:
         deleted = await delete_budget(callback.from_user.id, category)
     except Exception as e:
@@ -223,3 +235,4 @@ async def cb_nav_budget(callback: CallbackQuery):
         return
     await callback.answer()
     await callback.message.answer(t("budget_menu_prompt", lang), reply_markup=_budget_menu_keyboard(lang))
+

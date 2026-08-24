@@ -138,6 +138,7 @@ TRANSLATIONS = {
     "batch_deleted": {"uk": "🗑️ <b>Видалено {n} записів.</b>", "en": "🗑️ <b>Deleted {n} entries.</b>"},
     "entry_deleted": {"uk": "🗑️ <b>Запис видалено.</b>", "en": "🗑️ <b>Entry deleted.</b>"},
     "undo_cancelled": {"uk": "Скасовано — запис залишився в таблиці.", "en": "Cancelled — the entry stayed in the sheet."},
+    "undo_row_changed": {"uk": "⚠️ Дані змінилися відтоді, як ти натиснув /undo (можливо, додався новий запис). Спробуй /undo ще раз.", "en": "⚠️ Data changed since you tapped /undo (maybe a new entry was added). Try /undo again."},
     "entry_cancelled": {"uk": "❌ Скасовано — запис не додано.", "en": "❌ Cancelled — entry not added."},
     "batch_cancelled": {"uk": "❌ Скасовано — жоден запис не додано.", "en": "❌ Cancelled — no entries were added."},
     "entry_expired": {"uk": "⌛ Запис застарів, спробуй надіслати ще раз.", "en": "⌛ This entry expired, try sending it again."},

@@ -6,4 +6,5 @@ python-dotenv==1.0.1
 matplotlib==3.9.2
 
 # Dev/test dependencies
-pytest==8.3.3
+pytest==8.4.2
+pytest-asyncio==1.4.0

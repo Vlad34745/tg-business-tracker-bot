@@ -8,7 +8,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from core.i18n import t
 from core import language
-from core.sheets import get_recent_transactions_with_index, get_transaction_row, delete_transaction_row
+from core.storage import get_recent_transactions_with_index, get_transaction_row, delete_transaction_row
 from core.handlers._shared import (
     router, is_owner, pending_edits, _store_pending_edit, awaiting_edit_field,
     clear_awaiting_states

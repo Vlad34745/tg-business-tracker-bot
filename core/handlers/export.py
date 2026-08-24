@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from core.export import build_csv
 from core import language
 from core.i18n import t
-from core.sheets import get_all_transactions
+from core.storage import get_all_transactions
 from core.handlers._shared import router, is_owner
 
 @router.message(Command("export"))

@@ -141,3 +141,4 @@ async def cmd_cancel(message: Message):
 
     had_state = clear_awaiting_states(message.from_user.id)
     await message.answer(t("cancel_done", lang) if had_state else t("cancel_nothing", lang))
+

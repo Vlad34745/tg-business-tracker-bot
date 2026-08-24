@@ -14,7 +14,7 @@ from core.report import get_frequent_categories
 from core import reminder
 from core import language
 from core.i18n import t
-from core.sheets import (
+from core.storage import (
     append_transaction, append_transactions_batch, get_last_transaction,
     delete_last_transaction, get_all_transactions,
     get_last_n_transactions, delete_last_n_transactions,
@@ -28,7 +28,7 @@ from core.handlers._shared import (
     awaiting_remind_time, awaiting_find_query, _record_recent_entry,
     _is_likely_duplicate, _build_preview_text, _build_preview_keyboard,
     _format_transaction, pending_edits, awaiting_edit_field,
-    clear_awaiting_states
+    clear_awaiting_states, _undo_snapshot, _raw_rows_equal
 )
 from core.handlers.reports import _generate_report
 from core.handlers.edit import _build_edit_detail_text, _build_edit_detail_keyboard, _rows_match
@@ -106,6 +106,7 @@ async def cmd_undo(message: Message):
             InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="undo_cancel"),
         ]])
 
+        _undo_snapshot[user_id] = {"rows": rows}
         await message.answer("\n".join(preview_lines), reply_markup=confirm_keyboard)
         return
 
@@ -128,6 +129,7 @@ async def cmd_undo(message: Message):
         InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="undo_cancel"),
     ]])
 
+    _undo_snapshot[user_id] = {"row": row}
     await message.answer(
         f"{t('confirm_delete_this', lang)}\n\n"
         f"{t('label_date', lang)} {date}\n"
@@ -146,6 +148,26 @@ async def cb_undo_batch_confirm(callback: CallbackQuery):
         return
 
     n = int(callback.data.split(":", 1)[1])
+    snapshot = _undo_snapshot.pop(callback.from_user.id, None)
+
+    try:
+        current_rows = await get_last_n_transactions(callback.from_user.id, n)
+    except Exception as e:
+        await callback.message.edit_text(t("err_sheet_read", lang, e=e))
+        await callback.answer()
+        return
+
+    expected_rows = snapshot["rows"] if snapshot else None
+    rows_match = (
+        expected_rows is not None
+        and len(current_rows) == len(expected_rows)
+        and all(_raw_rows_equal(c, e) for c, e in zip(current_rows, expected_rows))
+    )
+    if not rows_match:
+        await callback.message.edit_text(t("undo_row_changed", lang))
+        await callback.answer()
+        return
+
     try:
         deleted_rows = await delete_last_n_transactions(callback.from_user.id, n)
     except Exception as e:
@@ -172,6 +194,21 @@ async def cb_undo_confirm(callback: CallbackQuery):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
+    snapshot = _undo_snapshot.pop(callback.from_user.id, None)
+
+    try:
+        current_row = await get_last_transaction(callback.from_user.id)
+    except Exception as e:
+        await callback.message.edit_text(t("err_sheet_read", lang, e=e))
+        await callback.answer()
+        return
+
+    expected_row = snapshot["row"] if snapshot else None
+    if not _raw_rows_equal(current_row, expected_row):
+        await callback.message.edit_text(t("undo_row_changed", lang))
+        await callback.answer()
+        return
+
     try:
         deleted_row = await delete_last_transaction(callback.from_user.id)
     except Exception as e:
@@ -189,6 +226,7 @@ async def cb_undo_confirm(callback: CallbackQuery):
 
 @router.callback_query(F.data == "undo_cancel")
 async def cb_undo_cancel(callback: CallbackQuery):
+    _undo_snapshot.pop(callback.from_user.id, None)
     await callback.message.edit_text(t("undo_cancelled", language.get_language(callback.from_user.id)))
     await callback.answer()
 
@@ -254,9 +292,20 @@ async def cb_entry_edit_category(callback: CallbackQuery):
     except Exception:
         top_categories = []  # fall back to just the custom-input option
 
+    # Reference the chosen category by its position in this list rather
+    # than embedding the category text directly in callback_data —
+    # Telegram caps callback_data at 64 *bytes*, and a longer Cyrillic
+    # category (2 bytes/char in UTF-8) can blow past that on its own,
+    # e.g. "Продукти для святкового столу" alone is already 60 bytes
+    # before the "set_cat:<entry_id>:" prefix is even added. Stashing
+    # the list on the entry itself (rather than a separate global dict)
+    # ties its lifetime to the pending entry's own — it's cleaned up
+    # the same way (LRU eviction / consumed on confirm/cancel).
+    entry["_category_choices"] = top_categories
+
     buttons = [
-        [InlineKeyboardButton(text=cat, callback_data=f"set_cat:{entry_id}:{cat}")]
-        for cat in top_categories
+        [InlineKeyboardButton(text=cat, callback_data=f"set_cat:{entry_id}:{i}")]
+        for i, cat in enumerate(top_categories)
     ]
     buttons.append([
         InlineKeyboardButton(text=t("btn_custom_option", lang), callback_data=f"custom_cat:{entry_id}")
@@ -278,11 +327,25 @@ async def cb_set_category(callback: CallbackQuery):
         await callback.answer(t("access_denied", lang), show_alert=True)
         return
 
-    _, entry_id, new_category = callback.data.split(":", 2)
+    _, entry_id, idx_str = callback.data.split(":", 2)
     entry = pending_entries.get(entry_id)
     if not entry:
         await callback.answer(t("entry_expired_short", lang), show_alert=True)
         await callback.message.edit_text(t("confirmation_expired_body", lang))
+        return
+
+    choices = entry.get("_category_choices", [])
+    try:
+        new_category = choices[int(idx_str)]
+    except (ValueError, IndexError):
+        # The button list this came from no longer matches what's
+        # stored (e.g. a very stale tap) — safest to just re-show the
+        # current preview rather than apply a wrong/missing category.
+        await callback.answer(t("entry_expired_short", lang), show_alert=True)
+        await callback.message.edit_text(
+            _build_preview_text(entry, lang),
+            reply_markup=_build_preview_keyboard(entry_id, lang)
+        )
         return
 
     entry["category"] = new_category

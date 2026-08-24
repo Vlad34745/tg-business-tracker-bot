@@ -17,7 +17,7 @@ from core.budget import parse_budgets_rows, check_budget_status
 from core.chart import generate_category_chart
 from core import language
 from core.i18n import t
-from core.sheets import get_all_transactions, get_budgets
+from core.storage import get_all_transactions, get_budgets
 from core.handlers._shared import (
     router, is_owner, awaiting_report_args, awaiting_report_topn,
     PERIOD_ARGS_MAP, clear_awaiting_states
@@ -307,3 +307,4 @@ async def cb_report_generate(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)  # remove the picker buttons
     await _generate_report(callback.from_user.id, args, callback.message.answer, callback.message.answer_photo)
+

@@ -69,3 +69,32 @@ def test_starting_new_flow_clears_stale_state_from_abandoned_one():
 
     assert 999 not in _shared.awaiting_edit_field
     assert _shared.awaiting_budget_category.get(999) is True
+
+
+# --- category choice cache (callback_data byte-limit workaround) ---
+
+def test_get_category_choice_returns_stored_value():
+    _shared._store_category_choices(111, ["Кафе", "Таксі", "Продукти для святкового столу"])
+    assert _shared._get_category_choice(111, 0) == "Кафе"
+    assert _shared._get_category_choice(111, 2) == "Продукти для святкового столу"
+
+
+def test_get_category_choice_out_of_range_returns_none():
+    _shared._store_category_choices(111, ["Кафе"])
+    assert _shared._get_category_choice(111, 5) is None
+    assert _shared._get_category_choice(111, -1) is None
+
+
+def test_get_category_choice_unknown_user_returns_none():
+    assert _shared._get_category_choice(555, 0) is None
+
+
+def test_get_category_choice_stale_index_after_picker_refresh():
+    # Simulates: person opens a picker (list A), doesn't tap anything,
+    # opens a fresh picker later (list B, shorter). A tap using an
+    # index from the old message must not resolve to something from
+    # the new, unrelated list.
+    _shared._store_category_choices(111, ["Кафе", "Таксі", "Продукти"])
+    _shared._store_category_choices(111, ["Новий"])
+    assert _shared._get_category_choice(111, 2) is None  # valid in old list, not the new one
+    assert _shared._get_category_choice(111, 0) == "Новий"
