@@ -5,3 +5,8 @@ __pycache__/
 reminder_settings.json
 language_settings.json
 auto_users.json
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/

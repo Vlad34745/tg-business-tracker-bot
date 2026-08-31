@@ -1,5 +1,8 @@
 # Telegram Business & P&L Finance Tracker Bot 📊💰
 
+[![Tests](https://github.com/Vlad34745/tg-business-tracker-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/Vlad34745/tg-business-tracker-bot/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/Vlad34745/tg-business-tracker-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/Vlad34745/tg-business-tracker-bot)
+
 A lightweight, secure Telegram Bot built with **aiogram 3.x** and **Google Sheets API**, ready for small-scale production use. It allows users to instantly log income and expenses into a remote Google Spreadsheet directly from their smartphones using clean Python regex parsing (no heavy AI overhead).
 
 ## 🏗️ Architecture
