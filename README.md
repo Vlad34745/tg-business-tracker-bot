@@ -2,6 +2,7 @@
 
 [![Tests](https://github.com/Vlad34745/tg-business-tracker-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/Vlad34745/tg-business-tracker-bot/actions/workflows/tests.yml)
 [![codecov](https://codecov.io/gh/Vlad34745/tg-business-tracker-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/Vlad34745/tg-business-tracker-bot)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A lightweight, secure Telegram Bot built with **aiogram 3.x** and **Google Sheets API**, ready for small-scale production use. It allows users to instantly log income and expenses into a remote Google Spreadsheet directly from their smartphones using clean Python regex parsing (no heavy AI overhead).
 
@@ -82,3 +83,7 @@ Unit tests cover the message-parsing and category-normalization logic in `core/v
 pip install pytest
 pytest tests/ -v
 ```
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE) — you are free to use, modify, and distribute it, as long as the original copyright notice is included.
