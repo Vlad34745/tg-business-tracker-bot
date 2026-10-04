@@ -78,10 +78,16 @@ Each Telegram command lives in its own module under `core/handlers/`, all regist
 5. Run the bot using `python -m core.bot` or launch via Windows `finance_bot.bat`.
 
 ## 🧪 Running Tests
-Unit tests cover the message-parsing and category-normalization logic in `core/validator.py`, monthly report aggregation in `core/report.py`, budget comparison in `core/budget.py`, chart generation in `core/chart.py`, CSV export in `core/export.py`, search filtering in `core/search.py`, reminder scheduling logic in `core/reminder.py`, translation lookup in `core/i18n.py`, and per-user language persistence in `core/language.py`:
+The test suite (~540 tests, ~99% line coverage of `core/`) covers:
+- **Pure logic:** message parsing and category normalization (`core/validator.py`), report aggregation (`core/report.py`), budgets, charts, CSV export, search, reminders, translations and per-user language persistence.
+- **Telegram handlers:** every command and inline-button callback in `core/handlers/` (`/start`, `/last`, `/undo`, `/edit`, `/report`, `/budget`, `/find`, `/remind`, `/export`, `/language`, `/cancel`, `/stats`, and the multi-step "type your answer" flows), including access control for non-allowed users, expired buttons and error paths. Handlers are called directly with fake `Message`/`CallbackQuery` objects — no Telegram connection needed.
+- **Google Sheets storage:** all reads/writes/deletes in `core/storage/`, tab creation and self-healing, retries — against a mocked Sheets client, so no credentials or network are needed.
+- **Startup wiring:** `core/bot.py` and the background reminder loop.
+
+All tests are hermetic: settings files are redirected to temporary folders, so running them never touches your real `language_settings.json`, `reminder_settings.json` or `auto_users.json`.
 ```
-pip install pytest
-pytest tests/ -v
+pip install pytest pytest-asyncio pytest-cov
+pytest tests/ -v --cov=core --cov-report=term-missing
 ```
 
 ## 📄 License
